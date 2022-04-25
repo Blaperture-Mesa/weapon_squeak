@@ -4,9 +4,12 @@ from os import environ
 from queue import Queue
 from time import time, sleep
 from datetime import datetime
+from hashlib import md5
+from pprint import pformat
 import csotools_serverquery as a2s
 import csotools_serverquery.connection as a2s_con
-from fastapi import FastAPI, Response, status
+from fastapi import FastAPI, Request, Response, Depends, status
+from fastapi_etag import Etag, add_exception_handler as etag_add_exception_handler
 
 
 BM_SQUEAK_ADDRESS = [
@@ -28,6 +31,7 @@ data_expired = datetime.now()
 q = Queue()
 get_epoch = lambda: int( time() )
 app = FastAPI()
+etag_add_exception_handler( app )
 logger = getLogger( "uvicorn" )
 
 
@@ -54,7 +58,20 @@ def event_startup_run_update ():
     thread.start()
 
 
-@app.get( "/a2s/{command}" )
+async def get_etag (request: Request):
+    global data
+    cmd = request.path_params["command"]
+    if cmd not in data:
+        return ''
+    return md5( pformat(data[cmd]).encode('utf-8') ).hexdigest()
+
+
+@app.get( "/a2s/{command}", dependencies=[Depends(
+    Etag(
+        get_etag
+        , extra_headers={"Expires": data_expired.isoformat()},
+    )
+)] )
 def get_a2s (command: str, response: Response):
     global data, data_expired
     if command not in data:
@@ -67,7 +84,6 @@ def get_a2s (command: str, response: Response):
         result.update( response_busy(response) )
         return result
     result[command] = data[command]
-    response.headers["Expires"] = data_expired.isoformat()
     return result
 
 
