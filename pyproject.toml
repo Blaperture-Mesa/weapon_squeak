@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "weapon_squeak"
-version = "0.1.0"
+version = "0.2.0"
 description = "Unidentified bioweapon acquired"
 authors = ["Your Name <you@example.com>"]
 license = "MIT"

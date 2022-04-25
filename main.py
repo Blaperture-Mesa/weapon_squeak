@@ -104,6 +104,7 @@ def run_update ():
         ue = get_epoch()
         for subdata in data.values():
             subdata["status"] = False
+            subdata["values"].clear()
         for host in BM_SQUEAK_ADDRESS:
             for port in range( BM_SQUEAK_PORT_MIN, BM_SQUEAK_PORT_MAX+1 ):
                 q.put( (do_ping, [(host, port)]) )
