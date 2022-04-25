@@ -106,8 +106,9 @@ def run_update ():
             subdata["status"] = False
             subdata["values"].clear()
         for host in BM_SQUEAK_ADDRESS:
-            for port in range( BM_SQUEAK_PORT_MIN, BM_SQUEAK_PORT_MAX+1 ):
-                q.put( (do_ping, [(host, port)]) )
+            if host:
+                for port in range( BM_SQUEAK_PORT_MIN, BM_SQUEAK_PORT_MAX+1 ):
+                    q.put( (do_ping, [(host, port)]) )
         q.join()
         data["ping"]["status"] = True
         pings: dict[str,float] = data["ping"]["values"]
