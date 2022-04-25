@@ -1,0 +1,19 @@
+[tool.poetry]
+name = "weapon_squeak"
+version = "0.1.0"
+description = "Unidentified bioweapon acquired"
+authors = ["Your Name <you@example.com>"]
+license = "MIT"
+
+[tool.poetry.dependencies]
+python = "^3.10"
+fastapi = "^0.75.2"
+uvicorn = {extras = ["standard"], version = "^0.17.6"}
+csotools-serverquery = "^0.3.0"
+ujson = "^5.2.0"
+
+[tool.poetry.dev-dependencies]
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
