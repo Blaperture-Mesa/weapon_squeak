@@ -15,7 +15,7 @@ from fastapi_etag import Etag, add_exception_handler as etag_add_exception_handl
 BM_SQUEAK_ADDRESS = [
     x
     for x
-    in environ.get("BM_SQUEAK_ADDRESS", "ec2-13-228-182-70.ap-southeast-1.compute.amazonaws.com").split(";")
+    in environ.get("BM_SQUEAK_ADDRESS", "ec2-13-228-182-70.ap-southeast-1.compute.amazonaws.com;ec2-54-254-110-182.ap-southeast-1.compute.amazonaws.com").split(";")
 ]
 BM_SQUEAK_PORT_MIN = int( environ.get("BM_SQUEAK_PORT_MIN", 40000) )
 BM_SQUEAK_PORT_MAX = int( environ.get("BM_SQUEAK_PORT_MAX", 40300) )
