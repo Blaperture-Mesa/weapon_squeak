@@ -66,6 +66,12 @@ async def get_etag (request: Request):
     return md5( pformat(data[cmd]).encode('utf-8') ).hexdigest()
 
 
+@app.head( "/a2s/{command}", dependencies=[Depends(
+    Etag(
+        get_etag
+        , extra_headers={"Expires": data_expired.isoformat()},
+    )
+)] )
 @app.get( "/a2s/{command}", dependencies=[Depends(
     Etag(
         get_etag
