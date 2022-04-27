@@ -2,6 +2,7 @@ from logging import getLogger
 from threading import Thread
 from os import environ
 from queue import Queue
+from collections import OrderedDict
 from time import time, sleep
 from datetime import datetime
 from hashlib import md5
@@ -93,7 +94,7 @@ def get_a2s (command: str, request: Request, response: Response):
             result = b''
         return result
     if request.method != "HEAD":
-        result[command] = dict( sorted(data[command].items()) )
+        result[command] = dict( data[command] )
     else:
         result = b''
     return result
@@ -130,7 +131,7 @@ def _pre_process (subdata):
     subdata["values"].clear()
 def _post_process (data, cmd: str):
     data = data[cmd]
-    data["values"] = dict( sorted(data["values"].items()) )
+    data["values"] = OrderedDict( sorted(data["values"].items()) )
     data["status"] = True
 
 
