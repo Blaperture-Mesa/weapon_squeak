@@ -4,7 +4,6 @@ from os import environ
 from queue import Queue
 from collections import OrderedDict
 from time import time, sleep
-from datetime import datetime
 from hashlib import md5
 from pprint import pformat
 import csotools_serverquery as a2s
@@ -28,7 +27,6 @@ data = {
     , "info": {"status": False, "values": {},}
     , "players": {"status": False, "values": {},}
 }
-data_expired = datetime.now()
 q = Queue()
 get_epoch = lambda: int( time() )
 app = FastAPI()
@@ -67,20 +65,16 @@ async def get_etag (request: Request):
     return md5( pformat(data[cmd]).encode('utf-8') ).hexdigest()
 
 
-@app.head( "/a2s/{command}", dependencies=[Depends(
+_des = [Depends(
     Etag(
         get_etag
-        , extra_headers={"Expires": data_expired.isoformat()},
+        , extra_headers={"Cache-Control": f"public, max-age: {BM_SQUEAK_CACHE_TIME}"},
     )
-)] )
-@app.get( "/a2s/{command}", dependencies=[Depends(
-    Etag(
-        get_etag
-        , extra_headers={"Expires": data_expired.isoformat()},
-    )
-)] )
+)]
+@app.head( "/a2s/{command}", dependencies=_des )
+@app.get( "/a2s/{command}", dependencies=_des )
 def get_a2s (command: str, request: Request, response: Response):
-    global data, data_expired
+    global data
     if command not in data:
         return response_goaway( response )
     result = {
@@ -136,7 +130,7 @@ def _post_process (data, cmd: str):
 
 
 def run_update ():
-    global data, data_expired
+    global data
     while True:
         logger.info( "Start updating..." )
         ue = get_epoch()
@@ -158,7 +152,6 @@ def run_update ():
         q.join()
         _post_process( data, "info" )
         _post_process( data, "players" )
-        data_expired = datetime.utcfromtimestamp( get_epoch() + BM_SQUEAK_CACHE_TIME )
         logger.info( f"Start updating...completed! {get_epoch()-ue}s" )
         sleep( BM_SQUEAK_CACHE_TIME )
 
