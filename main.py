@@ -1,7 +1,6 @@
 from logging import getLogger
 from threading import Thread
 from os import environ
-from collections import OrderedDict
 from queue import Queue
 from time import time, sleep
 from datetime import datetime
@@ -24,9 +23,9 @@ BM_SQUEAK_MAX_THREAD = int( environ.get("BM_SQUEAK_MAX_THREAD", 100) )
 BM_SQUEAK_CACHE_TIME = int( environ.get("BM_SQUEAK_CACHE_TIME", 300) )
 
 data = {
-    "ping": {"status": False, "values": OrderedDict(),}
-    , "info": {"status": False, "values": OrderedDict(),}
-    , "players": {"status": False, "values": OrderedDict(),}
+    "ping": {"status": False, "values": {},}
+    , "info": {"status": False, "values": {},}
+    , "players": {"status": False, "values": {},}
 }
 data_expired = datetime.now()
 q = Queue()
@@ -79,7 +78,7 @@ async def get_etag (request: Request):
         , extra_headers={"Expires": data_expired.isoformat()},
     )
 )] )
-def get_a2s (command: str, response: Response):
+def get_a2s (command: str, request: Request, response: Response):
     global data, data_expired
     if command not in data:
         return response_goaway( response )
@@ -88,11 +87,14 @@ def get_a2s (command: str, response: Response):
     }
     if not data[command]["status"]:
         result["status"] = False
-        result.update( response_busy(response) )
+        if request.method != "HEAD":
+            result.update( response_busy(response) )
+        else:
+            result = b''
         return result
     if request.method != "HEAD":
         result[command] = dict( sorted(data[command].items()) )
-    else
+    else:
         result = b''
     return result
 
@@ -128,7 +130,7 @@ def _pre_process (subdata):
     subdata["values"].clear()
 def _post_process (data, cmd: str):
     data = data[cmd]
-    data["values"] = OrderedDict( sorted(data["values"].items()) )
+    data["values"] = dict( sorted(data["values"].items()) )
     data["status"] = True
 
 
