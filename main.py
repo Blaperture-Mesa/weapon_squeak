@@ -27,6 +27,7 @@ data = {
     , "info": {"status": False, "values": {},}
     , "players": {"status": False, "values": {},}
 }
+etag = {}
 q = Queue()
 get_epoch = lambda: int( time() )
 app = FastAPI()
@@ -62,7 +63,7 @@ async def get_etag (request: Request):
     cmd = request.path_params["command"]
     if cmd not in data:
         return ''
-    return md5( pformat(data[cmd]).encode('utf-8') ).hexdigest()
+    return etag[cmd]
 
 
 _des = [Depends(
@@ -126,6 +127,7 @@ def _pre_process (subdata):
 def _post_process (data, cmd: str):
     data = data[cmd]
     data["values"] = OrderedDict( sorted(data["values"].items()) )
+    etag[cmd] = md5( pformat(data["values"]).encode('utf-8') ).hexdigest()
     data["status"] = True
 
 
