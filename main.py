@@ -1,6 +1,7 @@
 from logging import getLogger
 from threading import Thread
 from os import environ
+from collections import OrderedDict
 from queue import Queue
 from time import time, sleep
 from datetime import datetime
@@ -23,9 +24,9 @@ BM_SQUEAK_MAX_THREAD = int( environ.get("BM_SQUEAK_MAX_THREAD", 100) )
 BM_SQUEAK_CACHE_TIME = int( environ.get("BM_SQUEAK_CACHE_TIME", 300) )
 
 data = {
-    "ping": {"status": False, "values": {},}
-    , "info": {"status": False, "values": {},}
-    , "players": {"status": False, "values": {},}
+    "ping": {"status": False, "values": OrderedDict(),}
+    , "info": {"status": False, "values": OrderedDict(),}
+    , "players": {"status": False, "values": OrderedDict(),}
 }
 data_expired = datetime.now()
 q = Queue()
@@ -89,7 +90,10 @@ def get_a2s (command: str, response: Response):
         result["status"] = False
         result.update( response_busy(response) )
         return result
-    result[command] = data[command]
+    if request.method != "HEAD":
+        result[command] = dict( sorted(data[command].items()) )
+    else
+        result = b''
     return result
 
 
@@ -119,20 +123,28 @@ def response_goaway (response: Response):
     return response
 
 
+def _pre_process (subdata):
+    subdata["status"] = False
+    subdata["values"].clear()
+def _post_process (data, cmd: str):
+    data = data[cmd]
+    data["values"] = OrderedDict( sorted(data["values"].items()) )
+    data["status"] = True
+
+
 def run_update ():
     global data, data_expired
     while True:
         logger.info( "Start updating..." )
         ue = get_epoch()
         for subdata in data.values():
-            subdata["status"] = False
-            subdata["values"].clear()
+            _pre_process( subdata )
         for host in BM_SQUEAK_ADDRESS:
             if host:
                 for port in range( BM_SQUEAK_PORT_MIN, BM_SQUEAK_PORT_MAX+1 ):
                     q.put( (do_ping, [(host, port)]) )
         q.join()
-        data["ping"]["status"] = True
+        _post_process( data, "ping" )
         pings: dict[str,float] = data["ping"]["values"]
         for addr in pings.keys():
             (host, port) = (addr).split( ":" )
@@ -141,8 +153,8 @@ def run_update ():
             (host, port) = (addr).split( ":" )
             q.put( (do_players, [(host, int(port))]) )
         q.join()
-        data["info"]["status"] = True
-        data["players"]["status"] = True
+        _post_process( data, "info" )
+        _post_process( data, "players" )
         data_expired = datetime.utcfromtimestamp( get_epoch() + BM_SQUEAK_CACHE_TIME )
         logger.info( f"Start updating...completed! {get_epoch()-ue}s" )
         sleep( BM_SQUEAK_CACHE_TIME )
