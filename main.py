@@ -82,16 +82,16 @@ def get_a2s (command: str, request: Request, response: Response):
         "status": True
     }
     if not data[command]["status"]:
+        if request.method == "HEAD":
+            response_busy( response )
+            return response
         result["status"] = False
-        if request.method != "HEAD":
-            result.update( response_busy(response) )
-        else:
-            result = b''
+        result.update( response_busy(response) )
         return result
-    if request.method != "HEAD":
-        result[command] = dict( data[command] )
-    else:
-        result = b''
+    if request.method == "HEAD":
+        response.status_code = status.HTTP_200_OK
+        return response
+    result[command] = dict( data[command] )
     return result
 
 
