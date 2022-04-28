@@ -27,7 +27,7 @@ data = {
     , "info": {"status": False, "values": {},}
     , "players": {"status": False, "values": {},}
 }
-etag = {}
+etag = dict.fromkeys( data.keys(), "" )
 q = Queue()
 get_epoch = lambda: int( time() )
 app = FastAPI()
