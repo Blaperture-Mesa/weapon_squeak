@@ -89,7 +89,7 @@ async def get_etag (request: Request):
 
 
 @app.get( "/a2s/{command}/{hostname}/{port}" )
-@app_limiter.limit( BM_SQUEAK_SINGLE_RATELIMIT )
+@app_limiter.shared_limit( BM_SQUEAK_SINGLE_RATELIMIT, "single" )
 async def get_a2s_single (
     command: str
     , hostname: str
