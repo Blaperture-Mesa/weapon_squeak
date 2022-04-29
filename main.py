@@ -1,4 +1,5 @@
 from logging import getLogger
+from asyncio import TimeoutError as ASyncTimeoutError
 from threading import Thread
 from os import environ
 from queue import Queue
@@ -8,8 +9,14 @@ from hashlib import md5
 from pprint import pformat
 import csotools_serverquery as a2s
 import csotools_serverquery.connection as a2s_con
+from starlette.exceptions import HTTPException
 from fastapi import FastAPI, Request, Response, Depends, status
+from fastapi.responses import JSONResponse
 from fastapi_etag import Etag, add_exception_handler as etag_add_exception_handler
+from slowapi import Limiter
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+
 
 
 BM_SQUEAK_ADDRESS = [
@@ -21,6 +28,7 @@ BM_SQUEAK_PORT_MIN = int( environ.get("BM_SQUEAK_PORT_MIN", 40000) )
 BM_SQUEAK_PORT_MAX = int( environ.get("BM_SQUEAK_PORT_MAX", 40300) )
 BM_SQUEAK_MAX_THREAD = int( environ.get("BM_SQUEAK_MAX_THREAD", 100) )
 BM_SQUEAK_CACHE_TIME = int( environ.get("BM_SQUEAK_CACHE_TIME", 300) )
+BM_SQUEAK_SINGLE_RATELIMIT = environ.get( "BM_SQUEAK_SINGLE_RATELIMIT", "10/minute" )
 
 data = {
     "ping": {"status": False, "values": {},}
@@ -30,9 +38,23 @@ data = {
 etag = dict.fromkeys( data.keys(), "" )
 q = Queue()
 get_epoch = lambda: int( time() )
+app_limiter = Limiter( key_func=get_remote_address, headers_enabled=True )
 app = FastAPI()
 etag_add_exception_handler( app )
+app.state.limiter = app_limiter
 logger = getLogger( "uvicorn" )
+
+
+@app.exception_handler( RateLimitExceeded )
+async def exception_ratelimit (request: Request, exc: RateLimitExceeded):
+    response = JSONResponse(
+        _exc_dict(exc)
+        , status_code=429
+    )
+    response = request.app.state.limiter._inject_headers(
+        response, request.state.view_rate_limit
+    )
+    return response
 
 
 @app.on_event( "startup" )
@@ -64,6 +86,31 @@ async def get_etag (request: Request):
     if cmd not in data:
         return ''
     return etag[cmd]
+
+
+@app.get( "/a2s/{command}/{hostname}/{port}" )
+@app_limiter.limit( BM_SQUEAK_SINGLE_RATELIMIT )
+async def get_a2s_single (
+    command: str
+    , hostname: str
+    , port: int
+    , request: Request
+    , response: Response
+):
+    global data
+    if command not in data:
+        return response_goaway( response )
+    result = {
+        "status": True
+        , "values": {}
+    }
+    try:
+        result["values"][f"{hostname}:{port}"] = (
+            await getattr(a2s, f"a{command}")( (hostname,port,), mutator_cls=a2s_con.CSOStreamMutator )
+        )
+    except Exception as exc:
+        return response_exc( response, exc )
+    return result
 
 
 _des = [Depends(
@@ -103,6 +150,16 @@ async def get_ping ():
 @app.get( "/{_:path}" )
 async def get_a_tea (_: str, response: Response):
     return response_goaway( response )
+
+
+def response_exc (response: Response, exc: BaseException):
+    if response:
+        if isinstance( exc, (TimeoutError, ASyncTimeoutError,) ):
+            response.status_code = status.HTTP_404_NOT_FOUND
+        else:
+            logger.exception( exc, exc_info=True )
+            response.status_code = status.HTTP_500_INTERNAL_SERVER_ERROR
+    return _exc_dict( exc )
 
 
 def response_busy (response: Response):
@@ -177,3 +234,13 @@ def do_players (addr: tuple):
     (host, port) = addr
     result = a2s.a2s_players.players( addr, mutator_cls=a2s_con.CSOStreamMutator )
     data["players"]["values"][f"{host}:{port}"] = result
+
+
+def _exc_dict (exc: BaseException):
+    detail = str( exc )
+    if isinstance( exc, HTTPException ):
+        detail = exc.detail
+    return {
+        "status": False
+        , "values": {"error": (type(exc).__name__, detail,)}
+    }

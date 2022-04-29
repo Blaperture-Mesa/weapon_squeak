@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "weapon_squeak"
-version = "0.4.0"
+version = "0.5.0"
 description = "Unidentified bioweapon acquired"
 authors = ["Your Name <you@example.com>"]
 license = "MIT"
@@ -12,6 +12,7 @@ uvicorn = {extras = ["standard"], version = "^0.17.6"}
 csotools-serverquery = "^0.3.0"
 ujson = "^5.2.0"
 fastapi-etag = "^0.4.0"
+slowapi = "^0.1.5"
 
 [tool.poetry.dev-dependencies]
 
