@@ -1,12 +1,12 @@
 [tool.poetry]
 name = "weapon_squeak"
-version = "0.5.0"
+version = "0.6.0"
 description = "Unidentified bioweapon acquired"
 authors = ["Your Name <you@example.com>"]
 license = "MIT"
 
 [tool.poetry.dependencies]
-python = "^3.10"
+python = ">=3.7,<4.0"
 fastapi = "^0.75.2"
 uvicorn = {extras = ["standard"], version = "^0.17.6"}
 csotools-serverquery = "^0.3.0"
