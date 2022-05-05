@@ -1,12 +1,10 @@
 from logging import getLogger
-from asyncio import TimeoutError as ASyncTimeoutError
-from threading import Thread
 from os import environ
-from queue import Queue
-from collections import OrderedDict
 from time import time, sleep
 from hashlib import md5
 from pprint import pformat
+from functools import partial
+from asyncio import TimeoutError as ASyncTimeoutError
 import csotools_serverquery as a2s
 import csotools_serverquery.connection as a2s_con
 from starlette.exceptions import HTTPException
@@ -16,6 +14,7 @@ from fastapi_etag import Etag, add_exception_handler as etag_add_exception_handl
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
+from weapon_squeak.threadutils import ThreadPoolManager, run_daemon_thread
 
 
 
@@ -29,63 +28,44 @@ BM_SQUEAK_PORT_MAX = int( environ.get("BM_SQUEAK_PORT_MAX", 40300) )
 BM_SQUEAK_MAX_THREAD = int( environ.get("BM_SQUEAK_MAX_THREAD", 100) )
 BM_SQUEAK_CACHE_TIME = int( environ.get("BM_SQUEAK_CACHE_TIME", 300) )
 BM_SQUEAK_SINGLE_RATELIMIT = environ.get( "BM_SQUEAK_SINGLE_RATELIMIT", "10/minute" )
-
-data = {
+A2S_DATA = {
     "ping": {"status": False, "values": {},}
     , "info": {"status": False, "values": {},}
     , "players": {"status": False, "values": {},}
 }
-etag = dict.fromkeys( data.keys(), "" )
-q = Queue()
+A2S_ETAGS = dict.fromkeys( A2S_DATA.keys(), "" )
+A2S_ASYNC = (
+    lambda cmd, *args, **kwargs:
+        getattr(a2s, f"a{cmd}")( *args, mutator_cls=a2s_con.CSOStreamMutator, **kwargs )
+)
+A2S_SYNC = (
+    lambda cmd, *args, **kwargs:
+        getattr(a2s, f"{cmd}")( *args, mutator_cls=a2s_con.CSOStreamMutator, **kwargs )
+)
 get_epoch = lambda: int( time() )
+split_hostport = partial(
+    map
+    , lambda x: x.split(":")
+)
 app_limiter = Limiter( key_func=get_remote_address, headers_enabled=True )
 app = FastAPI()
 etag_add_exception_handler( app )
 app.state.limiter = app_limiter
 logger = getLogger( "uvicorn" )
+threads_manager = ThreadPoolManager( BM_SQUEAK_MAX_THREAD, logger )
 
 
-@app.exception_handler( RateLimitExceeded )
-async def exception_ratelimit (request: Request, exc: RateLimitExceeded):
-    response = JSONResponse(
-        _exc_dict(exc)
-        , status_code=429
-    )
-    response = request.app.state.limiter._inject_headers(
-        response, request.state.view_rate_limit
-    )
-    return response
-
-
-@app.on_event( "startup" )
-def event_startup_build_threads ():
-    def _threader ():
-        while True:
-            (func, params) = q.get()
-            try:
-                func( *params )
-            except TimeoutError:
-                pass
-            q.task_done()
-    for _ in range( BM_SQUEAK_MAX_THREAD ):
-        thread = Thread( target=_threader )
-        thread.daemon = True
-        thread.start()
+async def get_etag (request: Request):
+    global A2S_DATA
+    cmd = request.path_params["command"]
+    if cmd not in A2S_DATA:
+        return ''
+    return A2S_ETAGS[cmd]
 
 
 @app.on_event( "startup" )
 def event_startup_run_update ():
-    thread = Thread( target=run_update )
-    thread.daemon = True
-    thread.start()
-
-
-async def get_etag (request: Request):
-    global data
-    cmd = request.path_params["command"]
-    if cmd not in data:
-        return ''
-    return etag[cmd]
+    run_daemon_thread( target=run_update )
 
 
 @app.get( "/a2s/{command}/{hostname}/{port}" )
@@ -97,8 +77,8 @@ async def get_a2s_single (
     , request: Request
     , response: Response
 ):
-    global data
-    if command not in data:
+    global A2S_DATA
+    if command not in A2S_DATA:
         return response_goaway( response )
     result = {
         "status": True
@@ -106,7 +86,7 @@ async def get_a2s_single (
     }
     try:
         result["values"][f"{hostname}:{port}"] = (
-            await getattr(a2s, f"a{command}")( (hostname,port,), mutator_cls=a2s_con.CSOStreamMutator )
+            await A2S_ASYNC( command, (hostname,port,) )
         )
     except Exception as exc:
         return response_exc( response, exc )
@@ -122,23 +102,23 @@ _des = [Depends(
 @app.head( "/a2s/{command}", dependencies=_des )
 @app.get( "/a2s/{command}", dependencies=_des )
 def get_a2s (command: str, request: Request, response: Response):
-    global data
-    if command not in data:
+    global A2S_DATA
+    if command not in A2S_DATA:
         return response_goaway( response )
     result = {
-        "status": True
+        "status": False
     }
-    if not data[command]["status"]:
+    if not A2S_DATA[command]["status"]:
+        busy = response_busy( response )
         if request.method == "HEAD":
-            response_busy( response )
             return response
-        result["status"] = False
-        result.update( response_busy(response) )
+        result.update( busy )
         return result
     if request.method == "HEAD":
         response.status_code = status.HTTP_200_OK
         return response
-    result[command] = dict( data[command] )
+    result["status"] = True
+    result[command] = A2S_DATA[command]
     return result
 
 
@@ -150,6 +130,18 @@ async def get_ping ():
 @app.get( "/{_:path}" )
 async def get_a_tea (_: str, response: Response):
     return response_goaway( response )
+
+
+@app.exception_handler( RateLimitExceeded )
+async def exception_ratelimit (request: Request, exc: RateLimitExceeded):
+    response = JSONResponse(
+        _exc_dict(exc)
+        , status_code=429
+    )
+    response = request.app.state.limiter._inject_headers(
+        response, request.state.view_rate_limit
+    )
+    return response
 
 
 def response_exc (response: Response, exc: BaseException):
@@ -178,62 +170,76 @@ def response_goaway (response: Response):
     return response
 
 
-def _pre_process (subdata):
-    subdata["status"] = False
-    subdata["values"].clear()
-def _post_process (data, cmd: str):
-    data = data[cmd]
-    data["values"] = OrderedDict( sorted(data["values"].items()) )
-    etag[cmd] = md5( pformat(data["values"]).encode('utf-8') ).hexdigest()
-    data["status"] = True
+def _update ( cmd: str, targets: tuple[tuple[str,int]] ):
+    global A2S_DATA
+    subdata = A2S_DATA[cmd]
+    def _task (address):
+        try:
+            return A2S_SYNC( cmd, address )
+        except TimeoutError as exc:
+            logger.debug( exc, exc_info=True )
+    workers = [
+        threads_manager.add_task( _task, address=(host, port,) )
+        for (host,port,)
+        in targets
+    ]
+    while not all( x.finished for x in workers ):
+        pass
+    workers = tuple(filter(
+        lambda x: not isinstance( x.result, (type(None),BaseException,) )
+        , workers
+    ))
+    items = map(
+        lambda address, result: (f"{address[0]}:{address[1]}", result,)
+        , (x.kwargs["address"] for x in workers)
+        , (x.result for x in workers)
+    )
+    items = sorted( items )
+    subdata["values"] = dict( items )
+    A2S_ETAGS[cmd] = md5( pformat(subdata["values"]).encode('utf-8') ).hexdigest()
+    subdata["status"] = True
+    return subdata
 
 
 def run_update ():
-    global data
+    global A2S_DATA
     while True:
         logger.info( "Start updating..." )
         ue = get_epoch()
-        for subdata in data.values():
-            _pre_process( subdata )
-        for host in BM_SQUEAK_ADDRESS:
-            if host:
-                for port in range( BM_SQUEAK_PORT_MIN, BM_SQUEAK_PORT_MAX+1 ):
-                    q.put( (do_ping, [(host, port)]) )
-        q.join()
-        _post_process( data, "ping" )
-        pings: dict[str,float] = data["ping"]["values"]
-        for addr in pings.keys():
-            (host, port) = (addr).split( ":" )
-            q.put( (do_info, [(host, int(port))]) )
-        for addr in pings.keys():
-            (host, port) = (addr).split( ":" )
-            q.put( (do_players, [(host, int(port))]) )
-        q.join()
-        _post_process( data, "info" )
-        _post_process( data, "players" )
+        for subdata in A2S_DATA.values():
+            subdata["status"] = False
+            subdata["values"].clear()
+        pings = _update(
+            "ping"
+            , (
+                (host, port,)
+                for port
+                in range( BM_SQUEAK_PORT_MIN, BM_SQUEAK_PORT_MAX+1 )
+                for host
+                in BM_SQUEAK_ADDRESS
+                if host
+            )
+        )
+        pings = pings["values"]
+        workers = [
+            run_daemon_thread(
+                target=_update
+                , args=(
+                    cmd
+                    , (
+                        (host, int(port))
+                        for (host,port,)
+                        in split_hostport( pings.keys() )
+                    )
+                )
+            )
+            for cmd
+            in ["info", "players"]
+        ]
+        for worker in workers:
+            worker.join()
         logger.info( f"Start updating...completed! {get_epoch()-ue}s" )
         sleep( BM_SQUEAK_CACHE_TIME )
-
-
-def do_ping (addr: tuple):
-    global data
-    (host, port) = addr
-    result = a2s.a2a_ping.ping( addr, mutator_cls=a2s_con.CSOStreamMutator )
-    data["ping"]["values"][f"{host}:{port}"] = result
-
-
-def do_info (addr: tuple):
-    global data
-    (host, port) = addr
-    result = a2s.a2s_info.info( addr, mutator_cls=a2s_con.CSOStreamMutator )
-    data["info"]["values"][f"{host}:{port}"] = result
-
-
-def do_players (addr: tuple):
-    global data
-    (host, port) = addr
-    result = a2s.a2s_players.players( addr, mutator_cls=a2s_con.CSOStreamMutator )
-    data["players"]["values"][f"{host}:{port}"] = result
 
 
 def _exc_dict (exc: BaseException):
