@@ -170,29 +170,29 @@ def response_goaway (response: Response):
     return response
 
 
+def _update_task (cmd: str, address: tuple):
+    try:
+        return A2S_SYNC( cmd, address )
+    except TimeoutError as exc:
+        logger.debug( exc, exc_info=True )
 def _update ( cmd: str, targets: tuple[tuple[str,int]] ):
     global A2S_DATA
     subdata = A2S_DATA[cmd]
-    def _task (address):
-        try:
-            return A2S_SYNC( cmd, address )
-        except TimeoutError as exc:
-            logger.debug( exc, exc_info=True )
     workers = [
-        threads_manager.add_task( _task, address=(host, port,) )
+        threads_manager.add_task( _update_task, cmd, address=(host, port,) )
         for (host,port,)
         in targets
     ]
     while not all( x.finished for x in workers ):
         pass
-    workers = tuple(filter(
+    filter_factory = lambda: (filter(
         lambda x: not isinstance( x.result, (type(None),BaseException,) )
         , workers
     ))
     items = map(
         lambda address, result: (f"{address[0]}:{address[1]}", result,)
-        , (x.kwargs["address"] for x in workers)
-        , (x.result for x in workers)
+        , (x.kwargs["address"] for x in filter_factory())
+        , (x.result for x in filter_factory())
     )
     items = sorted( items )
     subdata["values"] = dict( items )
