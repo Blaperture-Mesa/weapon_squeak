@@ -105,10 +105,18 @@ def get_a2s (command: str, request: Request, response: Response):
     global A2S_DATA
     if command not in A2S_DATA:
         return response_goaway( response )
+    cmd_data = A2S_DATA[command]
     result = {
         "status": False
     }
-    if not A2S_DATA[command]["status"]:
+    err = cmd_data["values"].get( "error", None )
+    if err:
+        exc = response_exc( response, err )
+        if request.method == "HEAD":
+            return response
+        result.update( exc )
+        return result
+    if not cmd_data["status"]:
         busy = response_busy( response )
         if request.method == "HEAD":
             return response
@@ -118,7 +126,7 @@ def get_a2s (command: str, request: Request, response: Response):
         response.status_code = status.HTTP_200_OK
         return response
     result["status"] = True
-    result[command] = A2S_DATA[command]
+    result[command] = cmd_data
     return result
 
 
@@ -146,11 +154,12 @@ async def exception_ratelimit (request: Request, exc: RateLimitExceeded):
 
 def response_exc (response: Response, exc: BaseException):
     if response:
-        if isinstance( exc, (TimeoutError, ASyncTimeoutError,) ):
+        response.status_code = status.HTTP_500_INTERNAL_SERVER_ERROR
+    if isinstance( exc, (TimeoutError, ASyncTimeoutError,) ):
+        if response:
             response.status_code = status.HTTP_404_NOT_FOUND
-        else:
-            logger.exception( exc, exc_info=True )
-            response.status_code = status.HTTP_500_INTERNAL_SERVER_ERROR
+    else:
+        logger.critical( exc, exc_info=True )
     return _exc_dict( exc )
 
 
@@ -176,8 +185,11 @@ def _update_task (cmd: str, address: tuple):
     except TimeoutError as exc:
         logger.debug( exc, exc_info=True )
 def _update ( cmd: str, targets: tuple[tuple[str,int]] ):
-    global A2S_DATA
+    global A2S_DATA, A2S_ETAGS
     subdata = A2S_DATA[cmd]
+    subdata["status"] = False
+    subdata["values"].clear()
+    A2S_ETAGS[cmd] = ""
     workers = [
         threads_manager.add_task( _update_task, cmd, address=(host, port,) )
         for (host,port,)
@@ -185,8 +197,14 @@ def _update ( cmd: str, targets: tuple[tuple[str,int]] ):
     ]
     while not all( x.finished for x in workers ):
         pass
+    for worker in workers:
+        result = worker.result
+        if isinstance( result, BaseException ):
+            subdata["values"] = { "error": result }
+            A2S_ETAGS[cmd] = "Error: One or few results are an exception"
+            return subdata
     filter_factory = lambda: (filter(
-        lambda x: not isinstance( x.result, (type(None),BaseException,) )
+        lambda x: not isinstance( x.result, type(None) )
         , workers
     ))
     items = map(
@@ -202,13 +220,16 @@ def _update ( cmd: str, targets: tuple[tuple[str,int]] ):
 
 
 def run_update ():
-    global A2S_DATA
+    global A2S_DATA, A2S_ETAGS
+    non_ping = [x for x in A2S_DATA.keys() if x != "ping"]
     while True:
         logger.info( "Start updating..." )
         ue = get_epoch()
         for subdata in A2S_DATA.values():
             subdata["status"] = False
             subdata["values"].clear()
+        for subkey in A2S_ETAGS.keys():
+            A2S_ETAGS[subkey] = ""
         pings = _update(
             "ping"
             , (
@@ -220,24 +241,29 @@ def run_update ():
                 if host
             )
         )
-        pings = pings["values"]
-        workers = [
-            run_daemon_thread(
-                target=_update
-                , args=(
-                    cmd
-                    , (
-                        (host, int(port))
-                        for (host,port,)
-                        in split_hostport( pings.keys() )
+        pings: dict = pings["values"]
+        if "error" in pings:
+            for cmd in non_ping:
+                A2S_DATA[cmd]["values"] = { "error": pings["error"] }
+                A2S_ETAGS[cmd] = A2S_ETAGS["ping"]
+        else:
+            workers = [
+                run_daemon_thread(
+                    target=_update
+                    , args=(
+                        cmd
+                        , (
+                            (host, int(port))
+                            for (host,port,)
+                            in split_hostport( pings.keys() )
+                        )
                     )
                 )
-            )
-            for cmd
-            in ["info", "players"]
-        ]
-        for worker in workers:
-            worker.join()
+                for cmd
+                in non_ping
+            ]
+            for worker in workers:
+                worker.join()
         logger.info( f"Start updating...completed! {get_epoch()-ue}s" )
         sleep( BM_SQUEAK_CACHE_TIME )
 

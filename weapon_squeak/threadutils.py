@@ -83,8 +83,7 @@ class ThreadPoolManager (metaclass=Singleton):
                 except BaseException as exc:
                     if self._logger:
                         self._logger.exception( exc, exc_info=True )
-                    else:
-                        raise exc
+                    raise exc
                 finally:
                     q.task_done()
                     continue
