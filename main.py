@@ -18,14 +18,13 @@ from weapon_squeak.threadutils import ThreadPoolManager, run_daemon_thread
 
 
 
-BM_SQUEAK_ADDRESS = [
-    x
-    for x
-    in environ.get("BM_SQUEAK_ADDRESS", "ec2-13-228-182-70.ap-southeast-1.compute.amazonaws.com;ec2-54-254-110-182.ap-southeast-1.compute.amazonaws.com").split(";")
-]
-BM_SQUEAK_PORT_MIN = int( environ.get("BM_SQUEAK_PORT_MIN", 40000) )
-BM_SQUEAK_PORT_MAX = int( environ.get("BM_SQUEAK_PORT_MAX", 40300) )
-BM_SQUEAK_MAX_THREAD = int( environ.get("BM_SQUEAK_MAX_THREAD", 100) )
+BM_SQUEAK_TW_ADDRESS = environ.get( "BM_SQUEAK_TW_ADDRESS", "112.121.65.{:d}" )
+BM_SQUEAK_TW_ADDRESS_MIN = max(  1, int(environ.get("BM_SQUEAK_TW_ADDRESS_MIN",  1)) )
+BM_SQUEAK_TW_ADDRESS_MAX = min( 99, int(environ.get("BM_SQUEAK_TW_ADDRESS_MAX", 97)) )
+BM_SQUEAK_TW_PORT = environ.get( "BM_SQUEAK_TW_PORT", "4{:02d}{:02d}" )
+BM_SQUEAK_TW_PORT_MIN = int( environ.get("BM_SQUEAK_TW_PORT_MIN", 0) )
+BM_SQUEAK_TW_PORT_MAX = min( 99, int(environ.get("BM_SQUEAK_TW_PORT_MAX", 20)) )
+BM_SQUEAK_MAX_THREAD = int( environ.get("BM_SQUEAK_MAX_THREAD", 236) )
 BM_SQUEAK_CACHE_TIME = int( environ.get("BM_SQUEAK_CACHE_TIME", 300) )
 BM_SQUEAK_SINGLE_RATELIMIT = environ.get( "BM_SQUEAK_SINGLE_RATELIMIT", "10/minute" )
 A2S_DATA = {
@@ -233,12 +232,11 @@ def run_update ():
         pings = _update(
             "ping"
             , (
-                (host, port,)
+                (BM_SQUEAK_TW_ADDRESS.format(host), int(BM_SQUEAK_TW_PORT.format(host,port)),)
                 for port
-                in range( BM_SQUEAK_PORT_MIN, BM_SQUEAK_PORT_MAX+1 )
+                in range( BM_SQUEAK_TW_PORT_MIN, BM_SQUEAK_TW_PORT_MAX+1 )
                 for host
-                in BM_SQUEAK_ADDRESS
-                if host
+                in range( BM_SQUEAK_TW_ADDRESS_MIN, BM_SQUEAK_TW_ADDRESS_MAX+1 )
             )
         )
         pings: dict = pings["values"]
