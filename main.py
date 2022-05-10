@@ -18,11 +18,11 @@ from weapon_squeak.threadutils import ThreadPoolManager, run_daemon_thread
 
 
 
-BM_SQUEAK_ADDRESS = [
+BM_SQUEAK_ADDRESS = list( filter(len, (
     x
     for x
-    in environ.get("BM_SQUEAK_ADDRESS", "ec2-13-228-182-70.ap-southeast-1.compute.amazonaws.com;ec2-54-254-110-182.ap-southeast-1.compute.amazonaws.com").split(";")
-]
+    in environ.get("BM_SQUEAK_ADDRESS", "13.228.182.70;54.254.110.182").split(";")
+)) )
 BM_SQUEAK_PORT_MIN = int( environ.get("BM_SQUEAK_PORT_MIN", 40000) )
 BM_SQUEAK_PORT_MAX = int( environ.get("BM_SQUEAK_PORT_MAX", 40300) )
 BM_SQUEAK_MAX_THREAD = int( environ.get("BM_SQUEAK_MAX_THREAD", 100) )
@@ -238,7 +238,6 @@ def run_update ():
                 in range( BM_SQUEAK_PORT_MIN, BM_SQUEAK_PORT_MAX+1 )
                 for host
                 in BM_SQUEAK_ADDRESS
-                if host
             )
         )
         pings: dict = pings["values"]
