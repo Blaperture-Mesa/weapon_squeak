@@ -21,11 +21,11 @@ from weapon_squeak.threadutils import ThreadPoolManager, run_daemon_thread
 BM_SQUEAK_ADDRESS = list( filter(len, (
     x
     for x
-    in environ.get("BM_SQUEAK_ADDRESS", "13.228.182.70;54.254.110.182").split(";")
+    in environ.get("BM_SQUEAK_ADDRESS", "121.14.44.33;121.14.44.34;121.14.44.35;121.14.44.36;121.14.44.37;121.14.44.38;121.14.44.39;121.14.44.40;121.14.44.41;121.14.44.42;121.14.44.43;121.14.44.44;121.14.44.45;121.14.44.46;121.14.44.47;121.14.44.48;121.14.44.49;121.14.44.50;121.14.44.51;121.14.44.52;121.14.44.53;121.14.44.54;121.14.44.55;121.14.44.56;121.14.44.57;121.14.44.58;121.14.44.59;121.14.44.60;121.14.44.61;121.14.44.62;121.14.44.63;121.14.44.64;121.14.44.65;121.14.44.66;121.14.44.67").split(";")
 )) )
-BM_SQUEAK_PORT_MIN = int( environ.get("BM_SQUEAK_PORT_MIN", 40000) )
-BM_SQUEAK_PORT_MAX = int( environ.get("BM_SQUEAK_PORT_MAX", 40300) )
-BM_SQUEAK_MAX_THREAD = int( environ.get("BM_SQUEAK_MAX_THREAD", 100) )
+BM_SQUEAK_CHN_PORT_START = int( environ.get("BM_SQUEAK_CHN_PORT_START", 40000) )
+BM_SQUEAK_CHN_PORT_SIZE = int( environ.get("BM_SQUEAK_CHN_PORT_SIZE", 120) )
+BM_SQUEAK_MAX_THREAD = int( environ.get("BM_SQUEAK_MAX_THREAD", 236) )
 BM_SQUEAK_CACHE_TIME = int( environ.get("BM_SQUEAK_CACHE_TIME", 300) )
 BM_SQUEAK_SINGLE_RATELIMIT = environ.get( "BM_SQUEAK_SINGLE_RATELIMIT", "10/minute" )
 A2S_DATA = {
@@ -233,11 +233,11 @@ def run_update ():
         pings = _update(
             "ping"
             , (
-                (host, port,)
+                (host, BM_SQUEAK_CHN_PORT_START + port + (host_id*120),)
+                for (host_id, host,)
+                in enumerate( BM_SQUEAK_ADDRESS )
                 for port
-                in range( BM_SQUEAK_PORT_MIN, BM_SQUEAK_PORT_MAX+1 )
-                for host
-                in BM_SQUEAK_ADDRESS
+                in range( BM_SQUEAK_CHN_PORT_SIZE )
             )
         )
         pings: dict = pings["values"]
