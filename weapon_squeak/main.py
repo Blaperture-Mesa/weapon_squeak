@@ -1,20 +1,18 @@
-from logging import getLogger
 from os import environ
-from time import time, sleep
+from time import sleep
 from hashlib import md5
 from pprint import pformat
-from functools import partial
-from asyncio import TimeoutError as ASyncTimeoutError
 import csotools_serverquery as a2s
 import csotools_serverquery.connection as a2s_con
-from starlette.exceptions import HTTPException
-from fastapi import FastAPI, Request, Response, Depends, status
+from fastapi import Request, Response, Depends, status
 from fastapi.responses import JSONResponse
 from fastapi_etag import Etag, add_exception_handler as etag_add_exception_handler
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
-from weapon_squeak.threadutils import ThreadPoolManager, run_daemon_thread
+from .threadutils import ThreadPoolManager, run_daemon_thread
+from .extra import get_epoch, split_hostport
+from .app import *
 
 
 
@@ -41,34 +39,24 @@ A2S_SYNC = (
     lambda cmd, *args, **kwargs:
         getattr(a2s, f"{cmd}")( *args, mutator_cls=a2s_con.CSOStreamMutator, **kwargs )
 )
-get_epoch = lambda: int( time() )
-split_hostport = partial(
-    map
-    , lambda x: x.split(":")
-)
-app_limiter = Limiter( key_func=get_remote_address, headers_enabled=True )
-app = FastAPI()
-etag_add_exception_handler( app )
-app.state.limiter = app_limiter
-logger = getLogger( "uvicorn" )
-threads_manager = ThreadPoolManager( BM_SQUEAK_MAX_THREAD, logger )
+
+
+APP_LIMITER = Limiter( key_func=get_remote_address, headers_enabled=True )
+etag_add_exception_handler( APP )
+APP.state.limiter = APP_LIMITER
+threads_manager = ThreadPoolManager( BM_SQUEAK_MAX_THREAD, LOGGER )
 
 
 async def get_etag (request: Request):
     global A2S_DATA
     cmd = request.path_params["command"]
     if cmd not in A2S_DATA:
-        return ''
+        return None
     return A2S_ETAGS[cmd]
 
 
-@app.on_event( "startup" )
-def event_startup_run_update ():
-    run_daemon_thread( target=run_update )
-
-
-@app.get( "/a2s/{command}/{hostname}/{port}" )
-@app_limiter.shared_limit( BM_SQUEAK_SINGLE_RATELIMIT, "single" )
+@APP.get( "/a2s/{command}/{hostname}/{port}" )
+@APP_LIMITER.shared_limit( BM_SQUEAK_SINGLE_RATELIMIT, "single" )
 async def get_a2s_single (
     command: str
     , hostname: str
@@ -81,25 +69,27 @@ async def get_a2s_single (
         return response_goaway( response )
     result = {
         "status": True
-        , "values": {}
+        , command: {
+            "values": {}
+        }
     }
     try:
-        result["values"][f"{hostname}:{port}"] = (
+        result[command]["values"][f"{hostname}:{port}"] = (
             await A2S_ASYNC( command, (hostname,port,) )
         )
     except Exception as exc:
-        return response_exc( response, exc )
+        return response_exception( response, exc )
     return result
 
 
-_des = [Depends(
+_DEPS = [Depends(
     Etag(
         get_etag
         , extra_headers={"Cache-Control": f"public, max-age: {BM_SQUEAK_CACHE_TIME}"},
     )
 )]
-@app.head( "/a2s/{command}", dependencies=_des )
-@app.get( "/a2s/{command}", dependencies=_des )
+@APP.head( "/a2s/{command}", dependencies=_DEPS )
+@APP.get( "/a2s/{command}", dependencies=_DEPS )
 def get_a2s (command: str, request: Request, response: Response):
     global A2S_DATA
     if command not in A2S_DATA:
@@ -110,7 +100,7 @@ def get_a2s (command: str, request: Request, response: Response):
     }
     err = cmd_data["values"].get( "error", None )
     if err:
-        exc = response_exc( response, err )
+        exc = response_exception( response, err )
         if request.method == "HEAD":
             return response
         result.update( exc )
@@ -129,20 +119,10 @@ def get_a2s (command: str, request: Request, response: Response):
     return result
 
 
-@app.get( "/ping" )
-async def get_ping ():
-    return "pong!"
-
-
-@app.get( "/{_:path}" )
-async def get_a_tea (_: str, response: Response):
-    return response_goaway( response )
-
-
-@app.exception_handler( RateLimitExceeded )
+@APP.exception_handler( RateLimitExceeded )
 async def exception_ratelimit (request: Request, exc: RateLimitExceeded):
     response = JSONResponse(
-        _exc_dict(exc)
+        get_exception_dict(exc)
         , status_code=429
     )
     response = request.app.state.limiter._inject_headers(
@@ -151,38 +131,11 @@ async def exception_ratelimit (request: Request, exc: RateLimitExceeded):
     return response
 
 
-def response_exc (response: Response, exc: BaseException):
-    if response:
-        response.status_code = status.HTTP_500_INTERNAL_SERVER_ERROR
-    if isinstance( exc, (TimeoutError, ASyncTimeoutError,) ):
-        if response:
-            response.status_code = status.HTTP_404_NOT_FOUND
-    else:
-        logger.critical( exc, exc_info=True )
-    return _exc_dict( exc )
-
-
-def response_busy (response: Response):
-    delay = 30
-    if response:
-        response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
-        response.headers["Retry-After"] = str(delay)
-    return {
-        "retry_after": delay
-    }
-
-
-def response_goaway (response: Response):
-    if response:
-        response.status_code = status.HTTP_418_IM_A_TEAPOT
-    return response
-
-
 def _update_task (cmd: str, address: tuple):
     try:
         return A2S_SYNC( cmd, address )
     except TimeoutError as exc:
-        logger.debug( exc, exc_info=True )
+        LOGGER.debug( exc, exc_info=True )
 def _update ( cmd: str, targets: tuple[tuple[str,int]] ):
     global A2S_DATA, A2S_ETAGS
     subdata = A2S_DATA[cmd]
@@ -222,7 +175,7 @@ def run_update ():
     global A2S_DATA, A2S_ETAGS
     non_ping = [x for x in A2S_DATA.keys() if x != "ping"]
     while True:
-        logger.info( "Start updating..." )
+        LOGGER.info( "Start updating..." )
         ue = get_epoch()
         for subdata in A2S_DATA.values():
             subdata["status"] = False
@@ -262,15 +215,13 @@ def run_update ():
             ]
             for worker in workers:
                 worker.join()
-        logger.info( f"Start updating...completed! {get_epoch()-ue}s" )
+        LOGGER.info( f"Start updating...completed! {get_epoch()-ue}s" )
         sleep( BM_SQUEAK_CACHE_TIME )
 
 
-def _exc_dict (exc: BaseException):
-    detail = str( exc )
-    if isinstance( exc, HTTPException ):
-        detail = exc.detail
-    return {
-        "status": False
-        , "values": {"error": (type(exc).__name__, detail,)}
-    }
+@APP.on_event( "startup" )
+def event_startup_run_update ():
+    run_daemon_thread( target=run_update )
+
+
+init()
