@@ -1,5 +1,5 @@
 from os import environ
-from time import sleep
+from time import sleep, perf_counter
 from hashlib import md5
 from pprint import pformat
 import csotools_serverquery as a2s
@@ -11,7 +11,7 @@ from slowapi import Limiter
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 from item_suit.threadutils import ThreadPoolManager, run_daemon_thread
-from item_suit.extra import get_epoch, split_hostport
+from item_suit.extra import split_hostport
 from item_suit.app import *
 
 
@@ -177,7 +177,7 @@ def run_update ():
     non_ping = [x for x in A2S_DATA.keys() if x != "ping"]
     while True:
         LOGGER.info( "Start updating..." )
-        ue = get_epoch()
+        ue = perf_counter()
         for subdata in A2S_DATA.values():
             subdata["status"] = False
             subdata["values"].clear()
@@ -216,7 +216,7 @@ def run_update ():
             ]
             for worker in workers:
                 worker.join()
-        LOGGER.info( f"Start updating...completed! {get_epoch()-ue}s" )
+        LOGGER.info( f"Start updating...completed! {perf_counter()-ue}s" )
         sleep( BM_SQUEAK_CACHE_TIME )
 
 
