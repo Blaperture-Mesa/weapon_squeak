@@ -45,7 +45,7 @@ A2S_SYNC = (
 APP_LIMITER = Limiter( key_func=get_remote_address, headers_enabled=True )
 etag_add_exception_handler( APP )
 APP.state.limiter = APP_LIMITER
-threads_manager = ThreadPoolManager( BM_SQUEAK_MAX_THREAD, LOGGER )
+THREADS_MAN = ThreadPoolManager( BM_SQUEAK_MAX_THREAD, LOGGER )
 
 
 async def get_etag (request: Request):
@@ -144,7 +144,7 @@ def _update ( cmd: str, targets: tuple[tuple[str,int]] ):
     subdata["values"].clear()
     A2S_ETAGS[cmd] = ""
     workers = [
-        threads_manager.add_task( _update_task, cmd, address=(host, port,) )
+        THREADS_MAN.add_task( _update_task, cmd, address=(host, port,) )
         for (host,port,)
         in targets
     ]
