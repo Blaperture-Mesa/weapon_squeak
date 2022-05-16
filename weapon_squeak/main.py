@@ -148,9 +148,8 @@ def _update ( cmd: str, targets: tuple[tuple[str,int]] ):
         for (host,port,)
         in targets
     ]
-    while not all( x.finished for x in workers ):
-        pass
     for worker in workers:
+        worker._event.wait()
         result = worker.result
         if isinstance( result, BaseException ):
             subdata["values"] = { "error": result }
