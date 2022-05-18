@@ -1,6 +1,6 @@
 from os import environ
 from time import sleep, perf_counter
-from asyncio import run as async_run, TimeoutError as AsyncTimeoutError
+from asyncio import TimeoutError as AsyncTimeoutError
 from hashlib import md5
 from pprint import pformat
 import csotools_serverquery as a2s
@@ -136,14 +136,12 @@ async def exception_ratelimit (request: Request, exc: RateLimitExceeded):
     return response
 
 
-def _update_task (cmd: str, address: tuple, is_async: bool):
+def _update_task (cmd: str, address: tuple):
     try:
-        if is_async:
-            return async_run( A2S_ASYNC(cmd, address) )
         return A2S_SYNC( cmd, address )
     except (TimeoutError, AsyncTimeoutError):
         LOGGER.debug( f"Timeout on {(cmd, address)}", exc_info=False )
-def _update (cmd: str, targets: tuple[tuple[str,int]], is_async: bool = False):
+def _update (cmd: str, targets: tuple[tuple[str,int]]):
     global A2S_DATA, A2S_ETAGS
     subdata = A2S_DATA[cmd]
     subdata["status"] = False
@@ -154,7 +152,6 @@ def _update (cmd: str, targets: tuple[tuple[str,int]], is_async: bool = False):
             _update_task
             , cmd
             , address=(host, port,)
-            , is_async=is_async
         )
         for (host,port,)
         in targets
