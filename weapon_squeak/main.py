@@ -28,11 +28,12 @@ BM_SQUEAK_MAX_THREAD = int( environ.get("BM_SQUEAK_MAX_THREAD", 100) )
 BM_SQUEAK_CACHE_TIME = int( environ.get("BM_SQUEAK_CACHE_TIME", 300) )
 BM_SQUEAK_SINGLE_RATELIMIT = environ.get( "BM_SQUEAK_SINGLE_RATELIMIT", "10/minute" )
 _A2S_DATA_FACTORY = lambda: {"status": False, "values": {},}
+A2S_COMMANDS = set([ "ping", "info", "players", "rules", ])
 A2S_DATA = {
-    "ping": _A2S_DATA_FACTORY()
-    , "info": _A2S_DATA_FACTORY()
-    , "players": _A2S_DATA_FACTORY()
-    , "rules": _A2S_DATA_FACTORY()
+    cmd: _A2S_DATA_FACTORY()
+    for cmd
+    in A2S_COMMANDS
+    if cmd != "rules"
 }
 A2S_ETAGS = dict.fromkeys( A2S_DATA.keys(), "" )
 A2S_ASYNC = (
@@ -68,8 +69,8 @@ async def get_a2s_single (
     , request: Request
     , response: Response
 ):
-    global A2S_DATA
-    if command not in A2S_DATA:
+    global A2S_COMMANDS
+    if command not in A2S_COMMANDS:
         return response_goaway( response )
     result = {
         "status": True
@@ -218,7 +219,6 @@ def run_update ():
                             for (host,port,)
                             in split_hostport( pings.keys() )
                         )
-                        , cmd == "rules"
                     )
                 )
                 for cmd
