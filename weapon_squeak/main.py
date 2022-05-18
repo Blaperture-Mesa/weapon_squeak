@@ -33,7 +33,6 @@ A2S_DATA = {
     cmd: _A2S_DATA_FACTORY()
     for cmd
     in A2S_COMMANDS
-    if cmd != "rules"
 }
 A2S_ETAGS = dict.fromkeys( A2S_DATA.keys(), "" )
 A2S_ASYNC = (
