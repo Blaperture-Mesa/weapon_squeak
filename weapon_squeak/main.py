@@ -135,21 +135,26 @@ async def exception_ratelimit (request: Request, exc: RateLimitExceeded):
     return response
 
 
-def _update_task (cmd: str, address: tuple):
-    async def _update_task_async ():
-        return await A2S_ASYNC( cmd, address )
+def _update_task (cmd: str, address: tuple, is_async: bool):
     try:
-        return async_run( _update_task_async() )
-    except (TimeoutError, AsyncTimeoutError) as exc:
+        if is_async:
+            return async_run( A2S_ASYNC(cmd, address) )
+        return A2S_SYNC( cmd, address )
+    except (TimeoutError, AsyncTimeoutError):
         LOGGER.debug( f"Timeout on {(cmd, address)}", exc_info=False )
-def _update ( cmd: str, targets: tuple[tuple[str,int]] ):
+def _update (cmd: str, targets: tuple[tuple[str,int]], is_async: bool = False):
     global A2S_DATA, A2S_ETAGS
     subdata = A2S_DATA[cmd]
     subdata["status"] = False
     subdata["values"].clear()
     A2S_ETAGS[cmd] = ""
     workers = [
-        THREADS_MAN.add_task( _update_task, cmd, address=(host, port,) )
+        THREADS_MAN.add_task(
+            _update_task
+            , cmd
+            , address=(host, port,)
+            , is_async=is_async
+        )
         for (host,port,)
         in targets
     ]
@@ -213,6 +218,7 @@ def run_update ():
                             for (host,port,)
                             in split_hostport( pings.keys() )
                         )
+                        , cmd == "rules"
                     )
                 )
                 for cmd
