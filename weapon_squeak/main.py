@@ -1,5 +1,6 @@
 from os import environ
-from time import sleep
+from time import sleep, perf_counter
+from asyncio import run as async_run, TimeoutError as AsyncTimeoutError
 from hashlib import md5
 from pprint import pformat
 import csotools_serverquery as a2s
@@ -11,7 +12,7 @@ from slowapi import Limiter
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 from item_suit.threadutils import ThreadPoolManager, run_daemon_thread
-from item_suit.extra import get_epoch, split_hostport
+from item_suit.extra import split_hostport
 from item_suit.app import *
 
 
@@ -26,10 +27,12 @@ BM_SQUEAK_CHN_PORT_SIZE = int( environ.get("BM_SQUEAK_CHN_PORT_SIZE", 120) )
 BM_SQUEAK_MAX_THREAD = int( environ.get("BM_SQUEAK_MAX_THREAD", 236) )
 BM_SQUEAK_CACHE_TIME = int( environ.get("BM_SQUEAK_CACHE_TIME", 300) )
 BM_SQUEAK_SINGLE_RATELIMIT = environ.get( "BM_SQUEAK_SINGLE_RATELIMIT", "10/minute" )
+_A2S_DATA_FACTORY = lambda: {"status": False, "values": {},}
 A2S_DATA = {
-    "ping": {"status": False, "values": {},}
-    , "info": {"status": False, "values": {},}
-    , "players": {"status": False, "values": {},}
+    "ping": _A2S_DATA_FACTORY()
+    , "info": _A2S_DATA_FACTORY()
+    , "players": _A2S_DATA_FACTORY()
+    , "rules": _A2S_DATA_FACTORY()
 }
 A2S_ETAGS = dict.fromkeys( A2S_DATA.keys(), "" )
 A2S_ASYNC = (
@@ -45,7 +48,7 @@ A2S_SYNC = (
 APP_LIMITER = Limiter( key_func=get_remote_address, headers_enabled=True )
 etag_add_exception_handler( APP )
 APP.state.limiter = APP_LIMITER
-threads_manager = ThreadPoolManager( BM_SQUEAK_MAX_THREAD, LOGGER )
+THREADS_MAN = ThreadPoolManager( BM_SQUEAK_MAX_THREAD, LOGGER )
 
 
 async def get_etag (request: Request):
@@ -133,10 +136,12 @@ async def exception_ratelimit (request: Request, exc: RateLimitExceeded):
 
 
 def _update_task (cmd: str, address: tuple):
+    async def _update_task_async ():
+        return await A2S_ASYNC( cmd, address )
     try:
-        return A2S_SYNC( cmd, address )
-    except TimeoutError as exc:
-        LOGGER.debug( exc, exc_info=True )
+        return async_run( _update_task_async() )
+    except (TimeoutError, AsyncTimeoutError) as exc:
+        LOGGER.debug( f"Timeout on {(cmd, address)}", exc_info=False )
 def _update ( cmd: str, targets: tuple[tuple[str,int]] ):
     global A2S_DATA, A2S_ETAGS
     subdata = A2S_DATA[cmd]
@@ -144,13 +149,12 @@ def _update ( cmd: str, targets: tuple[tuple[str,int]] ):
     subdata["values"].clear()
     A2S_ETAGS[cmd] = ""
     workers = [
-        threads_manager.add_task( _update_task, cmd, address=(host, port,) )
+        THREADS_MAN.add_task( _update_task, cmd, address=(host, port,) )
         for (host,port,)
         in targets
     ]
-    while not all( x.finished for x in workers ):
-        pass
     for worker in workers:
+        worker.event.wait()
         result = worker.result
         if isinstance( result, BaseException ):
             subdata["values"] = { "error": result }
@@ -177,7 +181,7 @@ def run_update ():
     non_ping = [x for x in A2S_DATA.keys() if x != "ping"]
     while True:
         LOGGER.info( "Start updating..." )
-        ue = get_epoch()
+        ue = perf_counter()
         for subdata in A2S_DATA.values():
             subdata["status"] = False
             subdata["values"].clear()
@@ -216,7 +220,7 @@ def run_update ():
             ]
             for worker in workers:
                 worker.join()
-        LOGGER.info( f"Start updating...completed! {get_epoch()-ue}s" )
+        LOGGER.info( f"Start updating...completed! {perf_counter()-ue}s" )
         sleep( BM_SQUEAK_CACHE_TIME )
 
 
