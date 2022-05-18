@@ -1,6 +1,6 @@
 from os import environ
 from time import sleep, perf_counter
-from asyncio import run as async_run, TimeoutError as AsyncTimeoutError
+from asyncio import TimeoutError as AsyncTimeoutError
 from hashlib import md5
 from pprint import pformat
 import csotools_serverquery as a2s
@@ -28,11 +28,12 @@ BM_SQUEAK_MAX_THREAD = int( environ.get("BM_SQUEAK_MAX_THREAD", 236) )
 BM_SQUEAK_CACHE_TIME = int( environ.get("BM_SQUEAK_CACHE_TIME", 300) )
 BM_SQUEAK_SINGLE_RATELIMIT = environ.get( "BM_SQUEAK_SINGLE_RATELIMIT", "10/minute" )
 _A2S_DATA_FACTORY = lambda: {"status": False, "values": {},}
+A2S_COMMANDS = set([ "ping", "info", "players", "rules", ])
 A2S_DATA = {
-    "ping": _A2S_DATA_FACTORY()
-    , "info": _A2S_DATA_FACTORY()
-    , "players": _A2S_DATA_FACTORY()
-    , "rules": _A2S_DATA_FACTORY()
+    cmd: _A2S_DATA_FACTORY()
+    for cmd
+    in A2S_COMMANDS
+    if cmd != "rules"
 }
 A2S_ETAGS = dict.fromkeys( A2S_DATA.keys(), "" )
 A2S_ASYNC = (
@@ -68,8 +69,8 @@ async def get_a2s_single (
     , request: Request
     , response: Response
 ):
-    global A2S_DATA
-    if command not in A2S_DATA:
+    global A2S_COMMANDS
+    if command not in A2S_COMMANDS:
         return response_goaway( response )
     result = {
         "status": True
@@ -135,14 +136,12 @@ async def exception_ratelimit (request: Request, exc: RateLimitExceeded):
     return response
 
 
-def _update_task (cmd: str, address: tuple, is_async: bool):
+def _update_task (cmd: str, address: tuple):
     try:
-        if is_async:
-            return async_run( A2S_ASYNC(cmd, address) )
         return A2S_SYNC( cmd, address )
     except (TimeoutError, AsyncTimeoutError):
         LOGGER.debug( f"Timeout on {(cmd, address)}", exc_info=False )
-def _update (cmd: str, targets: tuple[tuple[str,int]], is_async: bool = False):
+def _update (cmd: str, targets: tuple[tuple[str,int]]):
     global A2S_DATA, A2S_ETAGS
     subdata = A2S_DATA[cmd]
     subdata["status"] = False
@@ -153,7 +152,6 @@ def _update (cmd: str, targets: tuple[tuple[str,int]], is_async: bool = False):
             _update_task
             , cmd
             , address=(host, port,)
-            , is_async=is_async
         )
         for (host,port,)
         in targets
@@ -218,7 +216,6 @@ def run_update ():
                             for (host,port,)
                             in split_hostport( pings.keys() )
                         )
-                        , cmd == "rules"
                     )
                 )
                 for cmd
