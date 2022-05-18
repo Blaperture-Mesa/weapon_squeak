@@ -33,7 +33,6 @@ A2S_DATA = {
     cmd: _A2S_DATA_FACTORY()
     for cmd
     in A2S_COMMANDS
-    if cmd != "rules"
 }
 A2S_ETAGS = dict.fromkeys( A2S_DATA.keys(), "" )
 A2S_ASYNC = (
@@ -141,6 +140,8 @@ def _update_task (cmd: str, address: tuple):
         return A2S_SYNC( cmd, address )
     except (TimeoutError, AsyncTimeoutError):
         LOGGER.debug( f"Timeout on {(cmd, address)}", exc_info=False )
+    except Exception as exc:
+        LOGGER.exception( exc, exc_info=True )
 def _update (cmd: str, targets: tuple[tuple[str,int]]):
     global A2S_DATA, A2S_ETAGS
     subdata = A2S_DATA[cmd]
