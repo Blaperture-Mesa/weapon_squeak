@@ -26,10 +26,12 @@ BM_SQUEAK_PORT_MAX = int( environ.get("BM_SQUEAK_PORT_MAX", 40300) )
 BM_SQUEAK_MAX_THREAD = int( environ.get("BM_SQUEAK_MAX_THREAD", 100) )
 BM_SQUEAK_CACHE_TIME = int( environ.get("BM_SQUEAK_CACHE_TIME", 300) )
 BM_SQUEAK_SINGLE_RATELIMIT = environ.get( "BM_SQUEAK_SINGLE_RATELIMIT", "10/minute" )
+_A2S_DATA_FACTORY = lambda: {"status": False, "values": {},}
 A2S_DATA = {
-    "ping": {"status": False, "values": {},}
-    , "info": {"status": False, "values": {},}
-    , "players": {"status": False, "values": {},}
+    "ping": _A2S_DATA_FACTORY()
+    , "info": _A2S_DATA_FACTORY()
+    , "players": _A2S_DATA_FACTORY()
+    , "rules": _A2S_DATA_FACTORY()
 }
 A2S_ETAGS = dict.fromkeys( A2S_DATA.keys(), "" )
 A2S_ASYNC = (
