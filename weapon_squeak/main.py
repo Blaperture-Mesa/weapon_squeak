@@ -52,9 +52,8 @@ THREADS_MAN = ThreadPoolManager( BM_SQUEAK_MAX_THREAD, LOGGER )
 
 
 async def get_etag (request: Request):
-    global A2S_DATA
     cmd = request.path_params["command"]
-    if cmd not in A2S_DATA:
+    if cmd not in A2S_ETAGS:
         return None
     return A2S_ETAGS[cmd]
 
@@ -68,7 +67,6 @@ async def get_a2s_single (
     , request: Request
     , response: Response
 ):
-    global A2S_COMMANDS
     if command not in A2S_COMMANDS:
         return response_goaway( response )
     result = {
@@ -95,7 +93,6 @@ _DEPS = [Depends(
 @APP.head( "/a2s/{command}", dependencies=_DEPS )
 @APP.get( "/a2s/{command}", dependencies=_DEPS )
 def get_a2s (command: str, request: Request, response: Response):
-    global A2S_DATA
     if command not in A2S_DATA:
         return response_goaway( response )
     cmd_data = A2S_DATA[command]
@@ -143,7 +140,6 @@ def _update_task (cmd: str, address: tuple):
     except Exception as exc:
         LOGGER.exception( exc, exc_info=True )
 def _update (cmd: str, targets: tuple[tuple[str,int]]):
-    global A2S_DATA, A2S_ETAGS
     subdata = A2S_DATA[cmd]
     subdata["status"] = False
     subdata["values"].clear()
@@ -181,8 +177,7 @@ def _update (cmd: str, targets: tuple[tuple[str,int]]):
 
 
 def run_update ():
-    global A2S_DATA, A2S_ETAGS
-    non_ping = [x for x in A2S_DATA.keys() if x != "ping"]
+    cmd_update_list = [x for x in A2S_DATA.keys() if x not in ["ping",]]
     while True:
         LOGGER.info( "Start updating..." )
         ue = perf_counter()
@@ -203,7 +198,7 @@ def run_update ():
         )
         pings: dict = pings["values"]
         if "error" in pings:
-            for cmd in non_ping:
+            for cmd in cmd_update_list:
                 A2S_DATA[cmd]["values"] = { "error": pings["error"] }
                 A2S_ETAGS[cmd] = A2S_ETAGS["ping"]
         else:
@@ -220,7 +215,7 @@ def run_update ():
                     )
                 )
                 for cmd
-                in non_ping
+                in cmd_update_list
             ]
             for worker in workers:
                 worker.join()
