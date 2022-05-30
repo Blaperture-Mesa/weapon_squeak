@@ -11,7 +11,7 @@ from fastapi_etag import Etag, add_exception_handler as etag_add_exception_handl
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
-from item_suit.threadutils import ThreadPoolManager, run_daemon_thread
+from item_suit.threadutils import ThreadPoolManager
 from item_suit.extra import split_hostport
 from item_suit.app import *
 
@@ -23,16 +23,18 @@ BM_SQUEAK_TW_ADDRESS_MAX = min( 99, int(environ.get("BM_SQUEAK_TW_ADDRESS_MAX", 
 BM_SQUEAK_TW_PORT = environ.get( "BM_SQUEAK_TW_PORT", "4{:02d}{:02d}" )
 BM_SQUEAK_TW_PORT_MIN = int( environ.get("BM_SQUEAK_TW_PORT_MIN", 0) )
 BM_SQUEAK_TW_PORT_MAX = min( 99, int(environ.get("BM_SQUEAK_TW_PORT_MAX", 20)) )
-BM_SQUEAK_MAX_THREAD = int( environ.get("BM_SQUEAK_MAX_THREAD", 236) )
-BM_SQUEAK_CACHE_TIME = int( environ.get("BM_SQUEAK_CACHE_TIME", 300) )
+BM_SQUEAK_CACHE_TIME = max( 2, int(environ.get("BM_SQUEAK_CACHE_TIME", 300)) )
 BM_SQUEAK_SINGLE_RATELIMIT = environ.get( "BM_SQUEAK_SINGLE_RATELIMIT", "10/minute" )
 _A2S_DATA_FACTORY = lambda: {"status": False, "values": {},}
 A2S_COMMANDS = set([ "ping", "info", "players", "rules", ])
+BM_SQUEAK_MAX_THREAD = max( len(A2S_COMMANDS)+2, int(environ.get("BM_SQUEAK_MAX_THREAD", 100)) )
 A2S_DATA = {
     cmd: _A2S_DATA_FACTORY()
     for cmd
     in A2S_COMMANDS
 }
+STATS_COMMAND = "stats"
+A2S_DATA[STATS_COMMAND] = _A2S_DATA_FACTORY()
 A2S_ETAGS = dict.fromkeys( A2S_DATA.keys(), "" )
 A2S_ASYNC = (
     lambda cmd, *args, **kwargs:
@@ -51,9 +53,8 @@ THREADS_MAN = ThreadPoolManager( BM_SQUEAK_MAX_THREAD, LOGGER )
 
 
 async def get_etag (request: Request):
-    global A2S_DATA
     cmd = request.path_params["command"]
-    if cmd not in A2S_DATA:
+    if cmd not in A2S_ETAGS:
         return None
     return A2S_ETAGS[cmd]
 
@@ -67,7 +68,6 @@ async def get_a2s_single (
     , request: Request
     , response: Response
 ):
-    global A2S_COMMANDS
     if command not in A2S_COMMANDS:
         return response_goaway( response )
     result = {
@@ -94,7 +94,6 @@ _DEPS = [Depends(
 @APP.head( "/a2s/{command}", dependencies=_DEPS )
 @APP.get( "/a2s/{command}", dependencies=_DEPS )
 def get_a2s (command: str, request: Request, response: Response):
-    global A2S_DATA
     if command not in A2S_DATA:
         return response_goaway( response )
     cmd_data = A2S_DATA[command]
@@ -142,46 +141,81 @@ def _update_task (cmd: str, address: tuple):
     except Exception as exc:
         LOGGER.exception( exc, exc_info=True )
 def _update (cmd: str, targets: tuple[tuple[str,int]]):
-    global A2S_DATA, A2S_ETAGS
     subdata = A2S_DATA[cmd]
     subdata["status"] = False
     subdata["values"].clear()
     A2S_ETAGS[cmd] = ""
-    workers = [
-        THREADS_MAN.add_task(
-            _update_task
-            , cmd
-            , address=(host, port,)
-        )
-        for (host,port,)
-        in targets
-    ]
-    for worker in workers:
-        worker.event.wait()
-        result = worker.result
-        if isinstance( result, BaseException ):
-            subdata["values"] = { "error": result }
+    if cmd == STATS_COMMAND:
+        # Run this after all A2S queries are done.
+        try:
+            subdata["values"] = {
+                "server_counts": len( A2S_DATA["ping"]["values"] )
+                , "player_counts": 0
+                , "map_counts": {}
+                , "gamemode_counts": {}
+            }
+            subval = subdata["values"]
+            map_counts: dict = subval["map_counts"]
+            gm_counts: dict = subval["gamemode_counts"]
+            rules = A2S_DATA["rules"]["values"]
+            for key,info in A2S_DATA["info"]["values"].items():
+                if key not in rules:
+                    continue
+                info: a2s.GoldSrcInfo = info
+                subval["player_counts"] += info.player_count - info.bot_count
+                for i,c in zip(
+                    [info.map_name,str(rules[key]["mp_gamemode"])]
+                    , [map_counts,gm_counts,]
+                    , strict=True
+                ):
+                    c[i] = c.get( i, 0 ) + 1
+            for x in [map_counts, gm_counts]:
+                xtmp = dict( sorted(x.items()) )
+                x.clear()
+                x.update( xtmp )
+        except BaseException as exc:
+            LOGGER.exception( exc, exc_info=True )
+            subdata["values"] = { "error": exc }
             A2S_ETAGS[cmd] = "Error: One or few results are an exception"
             return subdata
-    filter_factory = lambda: (filter(
-        lambda x: not isinstance( x.result, type(None) )
-        , workers
-    ))
-    items = map(
-        lambda address, result: (f"{address[0]}:{address[1]}", result,)
-        , (x.kwargs["address"] for x in filter_factory())
-        , (x.result for x in filter_factory())
-    )
-    items = sorted( items )
-    subdata["values"] = dict( items )
+    else:
+        workers = [
+            THREADS_MAN.add_task(
+                _update_task
+                , cmd
+                , address=(host, port,)
+            )
+            for (host,port,)
+            in targets
+        ]
+        for worker in workers:
+            worker.event.wait()
+            result = worker.result
+            if isinstance( result, BaseException ):
+                LOGGER.exception( result, exc_info=True )
+                subdata["values"] = { "error": result }
+                A2S_ETAGS[cmd] = "Error: One or few results are an exception"
+                return subdata
+        filter_factory = lambda: (filter(
+            lambda x: not isinstance( x.result, type(None) )
+            , workers
+        ))
+        items = map(
+            lambda address, result: (f"{address[0]}:{address[1]}", result,)
+            , (x.kwargs["address"] for x in filter_factory())
+            , (x.result for x in filter_factory())
+        )
+        items = sorted( items )
+        subdata["values"] = dict( items )
     A2S_ETAGS[cmd] = md5( pformat(subdata["values"]).encode('utf-8') ).hexdigest()
     subdata["status"] = True
     return subdata
 
 
 def run_update ():
-    global A2S_DATA, A2S_ETAGS
-    non_ping = [x for x in A2S_DATA.keys() if x != "ping"]
+    a2s_list = [x for x in A2S_COMMANDS if x not in ["ping",]]
+    cmd_list = a2s_list.copy()
+    cmd_list.append( STATS_COMMAND )
     while True:
         LOGGER.info( "Start updating..." )
         ue = perf_counter()
@@ -202,34 +236,33 @@ def run_update ():
         )
         pings: dict = pings["values"]
         if "error" in pings:
-            for cmd in non_ping:
+            for cmd in cmd_list:
                 A2S_DATA[cmd]["values"] = { "error": pings["error"] }
                 A2S_ETAGS[cmd] = A2S_ETAGS["ping"]
         else:
             workers = [
-                run_daemon_thread(
-                    target=_update
-                    , args=(
-                        cmd
-                        , (
-                            (host, int(port))
-                            for (host,port,)
-                            in split_hostport( pings.keys() )
-                        )
+                THREADS_MAN.add_task(
+                    _update
+                    , cmd
+                    , (
+                        (host, int(port))
+                        for (host,port,)
+                        in split_hostport( pings.keys() )
                     )
                 )
                 for cmd
-                in non_ping
+                in a2s_list
             ]
             for worker in workers:
-                worker.join()
+                worker.event.wait()
+            _update( STATS_COMMAND, None )
         LOGGER.info( f"Start updating...completed! {perf_counter()-ue}s" )
         sleep( BM_SQUEAK_CACHE_TIME )
 
 
 @APP.on_event( "startup" )
 def event_startup_run_update ():
-    run_daemon_thread( target=run_update )
+    THREADS_MAN.add_task( run_update )
 
 
 init()
