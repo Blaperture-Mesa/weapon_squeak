@@ -1,4 +1,5 @@
 from os import environ
+from enum import Enum
 from time import sleep, perf_counter
 from asyncio import TimeoutError as AsyncTimeoutError
 from hashlib import md5
@@ -47,6 +48,7 @@ A2S_SYNC = (
 )
 
 
+AppCommands = Enum( "AppCommands", {x.upper():x.lower() for x in A2S_DATA.keys()} )
 APP_LIMITER = Limiter( key_func=get_remote_address, headers_enabled=True )
 etag_add_exception_handler( APP )
 APP.state.limiter = APP_LIMITER
@@ -63,14 +65,13 @@ async def get_etag (request: Request):
 @APP.get( "/a2s/{command}/{hostname}/{port}" )
 @APP_LIMITER.shared_limit( BM_SQUEAK_SINGLE_RATELIMIT, "single" )
 async def get_a2s_single (
-    command: str
+    command: AppCommands
     , hostname: str
     , port: int
     , request: Request
     , response: Response
 ):
-    if command not in A2S_COMMANDS:
-        return response_goaway( response )
+    command: str = command.value
     result = {
         "status": True
         , command: {
@@ -94,9 +95,8 @@ _DEPS = [Depends(
 )]
 @APP.head( "/a2s/{command}", dependencies=_DEPS )
 @APP.get( "/a2s/{command}", dependencies=_DEPS )
-def get_a2s (command: str, request: Request, response: Response):
-    if command not in A2S_DATA:
-        return response_goaway( response )
+def get_a2s (command: AppCommands, request: Request, response: Response):
+    command: str = command.value
     cmd_data = A2S_DATA[command]
     result = {
         "status": False
@@ -214,9 +214,13 @@ def _update (cmd: str, targets: tuple[tuple[str,int]]):
 
 
 def run_update ():
-    a2s_list = [x for x in A2S_COMMANDS if x not in ["ping",]]
-    cmd_list = a2s_list.copy()
-    cmd_list.append( STATS_COMMAND )
+    cmd_list = tuple(
+        x.value
+        for x
+        in AppCommands.__members__.values()
+        if x not in [AppCommands.PING,]
+    )
+    a2s_list = tuple( filter(lambda x:x not in [STATS_COMMAND,], cmd_list) )
     while True:
         LOGGER.info( "Start updating..." )
         ue = perf_counter()
