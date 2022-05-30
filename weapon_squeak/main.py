@@ -150,30 +150,36 @@ def _update (cmd: str, targets: tuple[tuple[str,int]]):
         # Run this after all A2S queries are done.
         try:
             subdata["values"] = {
-                "server_counts": len( A2S_DATA["ping"]["values"] )
-                , "player_counts": 0
-                , "map_counts": {}
-                , "gamemode_counts": {}
+                "server_sum": len( A2S_DATA["ping"]["values"] )
+                , "player_sum": 0
+                , "map": {}
+                , "gamemode": {}
             }
-            subval = subdata["values"]
-            map_counts: dict = subval["map_counts"]
-            gm_counts: dict = subval["gamemode_counts"]
+            c_subdata = subdata["values"]
+            c_map: dict = c_subdata["map"]
+            c_gamemode: dict = c_subdata["gamemode"]
             rules = A2S_DATA["rules"]["values"]
-            for key,info in A2S_DATA["info"]["values"].items():
-                if key not in rules:
+            for addr,info in A2S_DATA["info"]["values"].items():
+                if addr not in rules:
                     continue
                 info: a2s.GoldSrcInfo = info
-                subval["player_counts"] += info.player_count - info.bot_count
-                for i,c in zip(
-                    [info.map_name,str(rules[key]["mp_gamemode"])]
-                    , [map_counts,gm_counts,]
+                player_sum = info.player_count - info.bot_count
+                c_subdata["player_sum"] += player_sum
+                for k,c in zip(
+                    [info.map_name, str(rules[addr]["mp_gamemode"])]
+                    , [c_map, c_gamemode,]
                     , strict=True
                 ):
-                    c[i] = c.get( i, 0 ) + 1
-            for x in [map_counts, gm_counts]:
-                xtmp = dict( sorted(x.items()) )
-                x.clear()
-                x.update( xtmp )
+                    cc: dict = c.get( k, {} )
+                    ccv = cc.get( "server_sum", 0 )
+                    cc["server_sum"] = ccv + 1
+                    ccv = cc.get( "player_sum", 0 )
+                    cc["player_sum"] = ccv + player_sum
+                    c[k] = cc
+            for c in [c_map, c_gamemode]:
+                tmp = dict( sorted(c.items()) )
+                c.clear()
+                c.update( tmp )
         except BaseException as exc:
             LOGGER.exception( exc, exc_info=True )
             subdata["values"] = { "error": exc }
