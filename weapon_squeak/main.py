@@ -32,7 +32,7 @@ BM_SQUEAK_CACHE_TIME = max( 2, int(environ.get("BM_SQUEAK_CACHE_TIME", 300)) )
 BM_SQUEAK_SINGLE_RATELIMIT = environ.get( "BM_SQUEAK_SINGLE_RATELIMIT", "10/minute" )
 A2S_COMMANDS = tuple( model.A2SCommandsDataOptional().dict().keys() )
 BM_SQUEAK_MAX_THREAD = max( len(A2S_COMMANDS)+2, int(environ.get("BM_SQUEAK_MAX_THREAD", 100)) )
-COMMANDS_DATA = model.CommandsData()
+COMMANDS_DATA = model.AppCommandsData()
 COMMANDS_ETAGS = dict.fromkeys( COMMANDS_DATA.dict().keys(), "" )
 A2S_ASYNC = (
     lambda cmd, *args, **kwargs:
@@ -63,7 +63,7 @@ async def get_etag (request: Request):
 
 @APP.get(
     "/a2s/{command}/{hostname}/{port}"
-    , response_model=model.CommandsDataOptional
+    , response_model=model.AppCommandsDataOptional
     , response_model_exclude_none=True
 )
 @APP_LIMITER.shared_limit( BM_SQUEAK_SINGLE_RATELIMIT, "single" )
@@ -96,7 +96,7 @@ _DEPS = [Depends(
 _KWARGS = {
     "path": "/a2s/{command}"
     , "dependencies": _DEPS
-    , "response_model": model.CommandsDataOptional
+    , "response_model": model.AppCommandsDataOptional
     , "response_model_exclude_none": True
 }
 @APP.head( **_KWARGS )
@@ -138,7 +138,7 @@ def _update (cmd: str, targets: tuple[tuple[str,int]]):
     if cmd == STATS_COMMAND:
         # Run this after all A2S queries are done.
         try:
-            c_subdata: model.StatsValuesModel = subdata.values
+            c_subdata: model.StatsValues = subdata.values
             c_subdata.server.sum = len( COMMANDS_DATA.ping.values )
             c_player = c_subdata.player
             c_player.sum = 0
@@ -156,7 +156,7 @@ def _update (cmd: str, targets: tuple[tuple[str,int]]):
                     , [c_map, c_gamemode,]
                     , strict=True
                 ):
-                    cc = c.get( k, model.StatsCommonModel() )
+                    cc = c.get( k, model.StatsGroups() )
                     cc.server.sum += 1
                     cc.player.sum += player_sum
                     c[k] = cc

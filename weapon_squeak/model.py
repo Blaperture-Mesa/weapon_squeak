@@ -35,34 +35,34 @@ def _create_model (name: str, values_cls: type = Any):
     return model
 
 
-A2SPingModel = _create_model( "A2SPing", float )
-A2SInfoModel = _create_model( "A2SInfo", GoldSrcInfo )
-A2SPlayersModel = _create_model( "A2SPlayers", list[_datacls_to_model(PlayerInfo)] )
-A2SRulesModel = _create_model( "A2SRules", dict[str,str] )
+A2SPing = _create_model( "A2SPing", float )
+A2SInfo = _create_model( "A2SInfo", GoldSrcInfo )
+A2SPlayers = _create_model( "A2SPlayers", list[_datacls_to_model(PlayerInfo)] )
+A2SRules = _create_model( "A2SRules", dict[str,str] )
 
 
-class StatsNumbersModel (BaseModel):
+class StatsNumbers (BaseModel):
     sum: int = 0
 
     def clear (self):
         self.sum = 0
-class StatsCommonModel (BaseModel):
-    server: StatsNumbersModel = StatsNumbersModel()
-    player: StatsNumbersModel = StatsNumbersModel()
+class StatsGroups (BaseModel):
+    server: StatsNumbers = StatsNumbers()
+    player: StatsNumbers = StatsNumbers()
 
     def clear (self):
         self.server.clear()
         self.player.clear()
-class StatsValuesModel (StatsCommonModel):
-    map: dict[str, StatsCommonModel] = {}
-    gamemode: dict[str, StatsCommonModel] = {}
+class StatsValues (StatsGroups):
+    map: dict[str, StatsGroups] = {}
+    gamemode: dict[str, StatsGroups] = {}
 
     def clear (self):
         super().clear()
         self.map.clear()
         self.gamemode.clear()
-class StatsModel (GenericModel):
-    values: Optional[StatsValuesModel] = StatsValuesModel()
+class Stats (GenericModel):
+    values: Optional[StatsValues] = StatsValues()
 
     def clear (self):
         tmp = self.values
@@ -73,22 +73,22 @@ class StatsModel (GenericModel):
 
 
 class A2SCommandsDataOptional (BaseModel):
-    ping: Optional[A2SPingModel]
-    info: Optional[A2SInfoModel]
-    players: Optional[A2SPlayersModel]
-    rules: Optional[A2SRulesModel]
+    ping: Optional[A2SPing]
+    info: Optional[A2SInfo]
+    players: Optional[A2SPlayers]
+    rules: Optional[A2SRules]
 
 
-class CommandsDataOptional (A2SCommandsDataOptional):
-    stats: Optional[StatsModel]
+class AppCommandsDataOptional (A2SCommandsDataOptional):
+    stats: Optional[Stats]
 
 
-CommandsData = create_model(
-    "CommandsData"
-    , ping = A2SPingModel()
-    , info = A2SInfoModel()
-    , players = A2SPlayersModel()
-    , rules = A2SRulesModel()
-    , stats = StatsModel()
-    , __base__ = CommandsDataOptional
+AppCommandsData = create_model(
+    "AppCommandsData"
+    , ping = A2SPing()
+    , info = A2SInfo()
+    , players = A2SPlayers()
+    , rules = A2SRules()
+    , stats = Stats()
+    , __base__ = AppCommandsDataOptional
 )
