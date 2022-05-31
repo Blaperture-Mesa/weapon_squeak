@@ -20,7 +20,19 @@ def _datacls_to_model (cls):
 def _create_model (name: str, values_cls: type = Any):
     if issubclass( values_cls, DataclsBase ):
         values_cls = _datacls_to_model( values_cls )
-    return create_model( name, __base__= GenericModel[values_cls] )
+    model = create_model(
+        name
+        , values = (Optional[dict[str, values_cls]], {})
+        , __base__ = GenericModel[values_cls]
+    )
+    def _clear (self):
+        tmp = self.values
+        if tmp:
+            tmp.clear()
+        super( GenericModel ).clear()
+        self.values = tmp
+    model.clear = _clear
+    return model
 
 
 A2SPingModel = _create_model( "A2SPing", float )
@@ -50,7 +62,14 @@ class StatsValuesModel (StatsCommonModel):
         self.map.clear()
         self.gamemode.clear()
 class StatsModel (GenericModel):
-    values: StatsValuesModel = StatsValuesModel()
+    values: Optional[StatsValuesModel] = StatsValuesModel()
+
+    def clear (self):
+        tmp = self.values
+        if tmp:
+            tmp.clear()
+        super().clear()
+        self.values = tmp
 
 
 class A2SCommandsDataOptional (BaseModel):
