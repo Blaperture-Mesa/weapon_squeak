@@ -13,6 +13,7 @@ from fastapi_etag import Etag, add_exception_handler as etag_add_exception_handl
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
+from brotli_asgi import BrotliMiddleware
 from item_suit.threadutils import ThreadPoolManager
 from item_suit.extra import split_hostport
 from item_suit.app import *
@@ -49,6 +50,7 @@ AppCommands = Enum( "AppCommands", {x.upper():x.lower() for x in COMMANDS_DATA.d
 APP_LIMITER = Limiter( key_func=get_remote_address, headers_enabled=True )
 etag_add_exception_handler( APP )
 APP.state.limiter = APP_LIMITER
+APP.add_middleware( BrotliMiddleware )
 THREADS_MAN = ThreadPoolManager( BM_SQUEAK_MAX_THREAD, LOGGER )
 
 

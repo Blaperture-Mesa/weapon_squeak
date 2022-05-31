@@ -11,6 +11,7 @@ csotools-serverquery = ">=0.4.0"
 fastapi-etag = "^0.4.0"
 slowapi = "^0.1.5"
 item-suit = {git = "https://github.com/Blaperture-Mesa/item_suit.git", rev = "main"}
+brotli-asgi = "^1.1.0"
 
 [tool.poetry.dev-dependencies]
 
