@@ -58,7 +58,11 @@ async def get_etag (request: Request):
     return COMMANDS_ETAGS[cmd]
 
 
-@APP.get( "/a2s/{command}/{hostname}/{port}", response_model=model.CommandsDataOptional )
+@APP.get(
+    "/a2s/{command}/{hostname}/{port}"
+    , response_model=model.CommandsDataOptional
+    , response_model_exclude_none=True
+)
 @APP_LIMITER.shared_limit( BM_SQUEAK_SINGLE_RATELIMIT, "single" )
 async def a2s_retrieve_single (
     command: A2SCommands
@@ -86,8 +90,14 @@ _DEPS = [Depends(
         , extra_headers={"Cache-Control": f"public, max-age: {BM_SQUEAK_CACHE_TIME}"},
     )
 )]
-@APP.head( "/a2s/{command}", dependencies=_DEPS, response_model=model.CommandsDataOptional )
-@APP.get( "/a2s/{command}", dependencies=_DEPS, response_model=model.CommandsDataOptional )
+_KWARGS = {
+    "path": "/a2s/{command}"
+    , "dependencies": _DEPS
+    , "response_model": model.CommandsDataOptional
+    , "response_model_exclude_none": True
+}
+@APP.head( **_KWARGS )
+@APP.get( **_KWARGS )
 def a2s_retrieve_all (command: AppCommands, request: Request, response: Response):
     command: str = command.value
     subdata: model.GenericModel[model.Any] = getattr( COMMANDS_DATA, command )
