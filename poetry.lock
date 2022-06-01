@@ -132,7 +132,7 @@ python-versions = ">=3.5"
 
 [[package]]
 name = "item-suit"
-version = "0.8.0"
+version = "0.9.0"
 description = "Welcome to the H.E.V. Mark IV protective system. For use in hazardous environment conditions."
 category = "main"
 optional = false
@@ -148,7 +148,7 @@ uvicorn = {version = "^0.17.6", extras = ["standard"]}
 type = "git"
 url = "https://github.com/Blaperture-Mesa/item_suit.git"
 reference = "main"
-resolved_reference = "a03c472c119070749eb56a4d12b637953712e7e5"
+resolved_reference = "e43565957dbbff5ea21908dcdaba801df1b8c1d2"
 
 [[package]]
 name = "limits"
