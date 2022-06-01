@@ -1,12 +1,14 @@
 import json
 from os import environ
-from enum import Enum
 from time import sleep, perf_counter
+from datetime import datetime, timezone, timedelta
+from threading import Event
 from asyncio import TimeoutError as AsyncTimeoutError
 from hashlib import md5
 from pprint import pformat
 import csotools_serverquery as a2s
 import csotools_serverquery.connection as a2s_con
+from sse_starlette.sse import EventSourceResponse
 from fastapi import Request, Response, Depends, status
 from fastapi.exceptions import HTTPException
 from fastapi_etag import Etag, add_exception_handler as etag_add_exception_handler
@@ -30,10 +32,9 @@ BM_SQUEAK_PORT_MIN = int( environ.get("BM_SQUEAK_PORT_MIN", 40000) )
 BM_SQUEAK_PORT_MAX = int( environ.get("BM_SQUEAK_PORT_MAX", 40300) )
 BM_SQUEAK_CACHE_TIME = max( 2, int(environ.get("BM_SQUEAK_CACHE_TIME", 300)) )
 BM_SQUEAK_SINGLE_RATELIMIT = environ.get( "BM_SQUEAK_SINGLE_RATELIMIT", "10/minute" )
-A2S_COMMANDS = tuple( model.A2SCommandsDataOptional().dict().keys() )
-BM_SQUEAK_MAX_THREAD = max( len(A2S_COMMANDS)+2, int(environ.get("BM_SQUEAK_MAX_THREAD", 100)) )
+BM_SQUEAK_MAX_THREAD = max( len(model.A2S_COMMANDS)+2, int(environ.get("BM_SQUEAK_MAX_THREAD", 100)) )
 COMMANDS_DATA = model.AppCommandsData()
-COMMANDS_ETAGS = dict.fromkeys( COMMANDS_DATA.dict().keys(), "" )
+COMMANDS_ETAGS = dict.fromkeys( dict(COMMANDS_DATA).keys(), "" )
 A2S_ASYNC = (
     lambda cmd, *args, **kwargs:
         getattr(a2s, f"a{cmd}")( *args, mutator_cls=a2s_con.CSOStreamMutator, **kwargs )
@@ -44,9 +45,7 @@ A2S_SYNC = (
 )
 
 
-STATS_COMMAND = "stats"
-A2SCommands = Enum( "A2SCommands", {x.upper():x.lower() for x in A2S_COMMANDS} )
-AppCommands = Enum( "AppCommands", {x.upper():x.lower() for x in COMMANDS_DATA.dict().keys()} )
+APP_SSE_STATE = Event()
 APP_LIMITER = Limiter( key_func=get_remote_address, headers_enabled=True )
 etag_add_exception_handler( APP )
 APP.state.limiter = APP_LIMITER
@@ -54,6 +53,8 @@ APP.add_middleware( BrotliMiddleware )
 THREADS_MAN = ThreadPoolManager( BM_SQUEAK_MAX_THREAD, LOGGER )
 
 
+def generate_etag (obj):
+    return md5( pformat(obj).encode('utf-8') ).hexdigest()
 async def get_etag (request: Request):
     cmd = request.path_params["command"]
     if cmd not in COMMANDS_ETAGS:
@@ -68,7 +69,7 @@ async def get_etag (request: Request):
 )
 @APP_LIMITER.shared_limit( BM_SQUEAK_SINGLE_RATELIMIT, "single" )
 async def a2s_retrieve_single (
-    command: A2SCommands
+    command: model.A2SCommands
     , hostname: str
     , port: int
     , request: Request
@@ -87,21 +88,22 @@ async def a2s_retrieve_single (
     return result
 
 
-_DEPS = [Depends(
-    Etag(
-        get_etag
-        , extra_headers={"Cache-Control": f"public, max-age: {BM_SQUEAK_CACHE_TIME}"},
-    )
-)]
 _KWARGS = {
     "path": "/a2s/{command}"
-    , "dependencies": _DEPS
+    , "dependencies": [Depends(
+        Etag(
+            get_etag
+            , extra_headers={
+                "Cache-Control": f"public, max-age: {BM_SQUEAK_CACHE_TIME}"
+            },
+        )
+    )]
     , "response_model": model.AppCommandsDataOptional
     , "response_model_exclude_none": True
 }
 @APP.head( **_KWARGS )
 @APP.get( **_KWARGS )
-def a2s_retrieve_all (command: AppCommands, request: Request, response: Response):
+def a2s_retrieve_all (command: model.AppCommands, request: Request, response: Response):
     command: str = command.value
     subdata: model.GenericModel[model.Any] = getattr( COMMANDS_DATA, command )
     result = { command: {} }
@@ -114,14 +116,61 @@ def a2s_retrieve_all (command: AppCommands, request: Request, response: Response
     return result
 
 
-def _update_clear (subdata: model.GenericModel):
+async def iter_sse_a2s_retrieve_all (request: Request, cmd: str):
+    subdata: model.GenericModel[model.Any] = getattr( COMMANDS_DATA, cmd )
+    subdata_type = model.A2S_MODELS[cmd]
+    result = (model.create_commands_stream_model(cmd))()
+    result_subdata: model.GenericModel[model.Any] = getattr( result, cmd )
+    result.clear()
+    while not APP_SSE_STATE.is_set():
+        if await request.is_disconnected():
+            break
+        etag = COMMANDS_ETAGS[cmd]
+        if result.etag == etag:
+            continue
+        result.clear()
+        result.etag = etag
+        exc = subdata.error
+        if exc:
+            result_subdata = subdata_type.parse_obj( response_exception(None, exc, False) )
+        elif not subdata.status:
+            result_subdata = subdata_type.parse_obj( response_busy(None) )
+        else:
+            result_subdata = subdata_type.parse_obj( subdata )
+            result.next_update = datetime.now(timezone.utc) + timedelta(seconds=BM_SQUEAK_CACHE_TIME)
+        setattr( result, cmd, result_subdata )
+        yield result.json(
+            exclude_none=True,
+            ensure_ascii=False,
+            allow_nan=False,
+            indent=None,
+            separators=(",", ":"),
+        )
+
+
+@APP.get(
+    f"{_KWARGS['path']}/subscribe"
+    , response_model=model.StreamCommandsDataOptional
+    , response_model_exclude_none=True
+)
+async def sse_a2s_retrieve_all (request: Request, command: model.AppCommands):
+    return EventSourceResponse( iter_sse_a2s_retrieve_all(request, command.value) )
+
+
+@APP.on_event( "shutdown" )
+def event_shutdown_stop_sse ():
+    APP_SSE_STATE.set()
+
+
+def _update_clear (subkey: str, subdata: model.GenericModel):
     subdata.status = False
+    COMMANDS_ETAGS[subkey] = ""
     subdata.values.clear()
 def _update_exception (cmd: str, exc: BaseException):
     subdata: model.GenericModel[model.Any] = getattr( COMMANDS_DATA, cmd )
     _update_clear( subdata )
     subdata.error = exc
-    COMMANDS_ETAGS[cmd] = "Error: One or few results are an exception"
+    COMMANDS_ETAGS[cmd] = generate_etag( subdata )
     return subdata
 def _update_task (cmd: str, address: tuple):
     try:
@@ -133,9 +182,8 @@ def _update_task (cmd: str, address: tuple):
         return exc
 def _update (cmd: str, targets: tuple[tuple[str,int]]):
     subdata: model.GenericModel[model.Any] = getattr( COMMANDS_DATA, cmd )
-    _update_clear( subdata )
-    COMMANDS_ETAGS[cmd] = ""
-    if cmd == STATS_COMMAND:
+    _update_clear( cmd, subdata )
+    if cmd == model.A2S_CMD_STATS_NAME:
         # Run this after all A2S queries are done.
         try:
             c_subdata: model.StatsValues = subdata.values
@@ -192,7 +240,7 @@ def _update (cmd: str, targets: tuple[tuple[str,int]]):
         )
         items = sorted( items )
         subdata.values = dict( items )
-    COMMANDS_ETAGS[cmd] = md5( pformat(subdata.values).encode('utf-8') ).hexdigest()
+    COMMANDS_ETAGS[cmd] = generate_etag( subdata )
     subdata.status = True
     return subdata
 
@@ -201,17 +249,15 @@ def run_update ():
     cmd_list = tuple(
         x.value
         for x
-        in AppCommands.__members__.values()
-        if x not in [AppCommands.PING,]
+        in model.AppCommands.__members__.values()
+        if x not in [model.AppCommands.PING,]
     )
-    a2s_list = tuple( filter(lambda x:x not in [STATS_COMMAND,], cmd_list) )
+    a2s_list = tuple( filter(lambda x:x not in [model.A2S_CMD_STATS_NAME,], cmd_list) )
     while True:
         LOGGER.info( "Start updating..." )
         ue = perf_counter()
-        for _,subdata in COMMANDS_DATA:
-            _update_clear( subdata )
-        for subkey in COMMANDS_ETAGS.keys():
-            COMMANDS_ETAGS[subkey] = ""
+        for subkey,subdata in COMMANDS_DATA:
+            _update_clear( subkey, subdata )
         pings = _update(
             "ping"
             , (
@@ -242,7 +288,7 @@ def run_update ():
             ]
             for worker in workers:
                 worker.event.wait()
-            _update( STATS_COMMAND, None )
+            _update( model.A2S_CMD_STATS_NAME, None )
         LOGGER.info( f"Start updating...completed! {perf_counter()-ue}s" )
         sleep( BM_SQUEAK_CACHE_TIME )
 
