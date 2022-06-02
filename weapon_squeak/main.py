@@ -67,6 +67,7 @@ async def get_etag (request: Request):
 
 
 def reset_update_time ():
+    global APP_COMMANDS_UPDATE_TIME
     with APP_COMMANDS_UPDATE_LOCK:
         APP_COMMANDS_UPDATE_TIME = (
             datetime.now( timezone.utc )
@@ -270,7 +271,7 @@ def run_update ():
     )
     a2s_list = tuple( filter(lambda x:x not in [model.A2S_CMD_STATS_NAME,], cmd_list) )
     while True:
-        LOGGER.info( "Start updating..." )
+        LOGGER.debug( "Start updating..." )
         ue = perf_counter()
         for subkey,subdata in APP_COMMANDS_DATA:
             _update_clear( subkey, subdata )
