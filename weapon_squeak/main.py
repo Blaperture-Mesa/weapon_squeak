@@ -67,6 +67,7 @@ async def get_etag (request: Request):
 
 
 def reset_update_time ():
+    global APP_COMMANDS_UPDATE_TIME
     with APP_COMMANDS_UPDATE_LOCK:
         APP_COMMANDS_UPDATE_TIME = (
             datetime.now( timezone.utc )
@@ -150,7 +151,8 @@ async def iter_sse_a2s_retrieve_all (request: Request, cmd: str):
             result_subdata = subdata_type.parse_obj( response_busy(None) )
         else:
             result_subdata = subdata_type.parse_obj( subdata )
-            result.next_update = APP_COMMANDS_UPDATE_TIME
+            result.next_update_time = APP_COMMANDS_UPDATE_TIME
+            result.cache_time = BM_SQUEAK_CACHE_TIME
         setattr( result, cmd, result_subdata )
         yield result.json(
             exclude_none=True,
@@ -270,7 +272,7 @@ def run_update ():
     )
     a2s_list = tuple( filter(lambda x:x not in [model.A2S_CMD_STATS_NAME,], cmd_list) )
     while True:
-        LOGGER.info( "Start updating..." )
+        LOGGER.debug( "Start updating..." )
         ue = perf_counter()
         for subkey,subdata in APP_COMMANDS_DATA:
             _update_clear( subkey, subdata )
