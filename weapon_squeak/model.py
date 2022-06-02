@@ -99,13 +99,15 @@ class AppCommandsDataOptional (A2SCommandsDataOptional):
 
 
 class StreamCommandsDataOptional (A2SCommandsDataOptional):
-    next_update: Optional[FutureDate]
+    next_update_time: Optional[FutureDate]
+    cache_time: Optional[int]
     etag: Optional[str]
 
     def clear (self):
         super().clear()
         self.etag = None
-        self.next_update = None
+        self.next_update_time = None
+        self.cache_time = None
 
 
 AppCommandsData = create_model(
