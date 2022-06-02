@@ -151,7 +151,8 @@ async def iter_sse_a2s_retrieve_all (request: Request, cmd: str):
             result_subdata = subdata_type.parse_obj( response_busy(None) )
         else:
             result_subdata = subdata_type.parse_obj( subdata )
-            result.next_update = APP_COMMANDS_UPDATE_TIME
+            result.next_update_time = APP_COMMANDS_UPDATE_TIME
+            result.cache_time = BM_SQUEAK_CACHE_TIME
         setattr( result, cmd, result_subdata )
         yield result.json(
             exclude_none=True,
