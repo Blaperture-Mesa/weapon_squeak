@@ -215,15 +215,24 @@ t_player_data = dict[str,t_population|model.StatsNumbers]
 def _update_stats (subdata: model.Stats):
     sd_rules: dict[str,str] = APP_COMMANDS_DATA.rules.values
     if not sd_rules:
-        warnings.warn( "A2S_RULES is empty", RuntimeWarning )
+        warnings.warn( "update_stats: A2S_RULES is empty", RuntimeWarning )
         return subdata
+    # Try to match the data length.
     sd_info: dict[str,a2s.GoldSrcInfo] = dict(
         filter(
             lambda x: x[0] in sd_rules
             , APP_COMMANDS_DATA.info.values.items()
         )
     )
-    assert len( sd_rules ) == len( sd_info )
+    sd_rules = dict(
+        filter(
+            lambda x: x[0] in sd_info
+            , sd_rules.items()
+        )
+    )
+    sd_rules_len, sd_info_len = len( sd_rules ), len( sd_info )
+    if sd_rules_len != sd_info_len:
+        raise RuntimeError( "sd_rules_len %i != %i sd_info_len", sd_rules_len, sd_info_len )
     values = subdata.values
     values.server = model.create_stats_numbers( len(sd_info) )
     server_data = {
