@@ -39,6 +39,7 @@ def _create_generic_model (name: str, values_cls: type = Any):
         super( base_cls, self ).clear()
         if my_values: my_values.clear()
         self.values = my_values
+        return self
     model_cls.clear = _clear
     return model_cls
 
@@ -70,6 +71,7 @@ class StatsNumbers (BaseModel):
         self.mean = \
         self.var = \
         self.std = None
+        return self
 
 
 def create_stats_numbers (data: Collection[int]|int):
@@ -100,6 +102,7 @@ class StatsGroups (BaseModel):
     def clear (self):
         self.server.clear()
         self.player.clear()
+        return self
 
 
 class StatsValues (StatsGroups):
@@ -110,6 +113,7 @@ class StatsValues (StatsGroups):
         super().clear()
         self.map.clear()
         self.gamemode.clear()
+        return self
 
 
 class Stats (GenericModel):
@@ -120,6 +124,7 @@ class Stats (GenericModel):
         super().clear()
         if my_values: my_values.clear()
         self.values = my_values
+        return self
 
 
 class A2SCommandsDataOptional (BaseModel):
@@ -133,6 +138,7 @@ class A2SCommandsDataOptional (BaseModel):
         self.info = None
         self.players = None
         self.rules = None
+        return self
 
 
 class AppCommandsDataOptional (A2SCommandsDataOptional):
@@ -141,6 +147,7 @@ class AppCommandsDataOptional (A2SCommandsDataOptional):
     def clear (self):
         super().clear()
         self.stats = None
+        return self
 
 
 class StreamCommandsDataOptional (A2SCommandsDataOptional):
@@ -153,6 +160,7 @@ class StreamCommandsDataOptional (A2SCommandsDataOptional):
         self.etag = None
         self.next_update_time = None
         self.cache_time = None
+        return self
 
 
 AppCommandsData = create_model(
@@ -170,6 +178,7 @@ def _clear (self):
     self.players.clear()
     self.rules.clear()
     self.stats.clear()
+    return self
 AppCommandsData.clear = _clear
 
 
@@ -201,5 +210,6 @@ def create_commands_stream_model (cmd: str):
         super( type(self), self ).clear()
         if my_subdata: my_subdata.clear()
         setattr( self, cmd, my_subdata )
+        return self
     model.clear = _clear
     return model
