@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "weapon_squeak"
-version = "0.19.0"
+version = "0.20.0"
 description = "Unidentified bioweapon acquired"
 authors = ["Your Name <you@example.com>"]
 license = "MIT"
@@ -13,6 +13,7 @@ slowapi = "^0.1.5"
 item-suit = {git = "https://github.com/Blaperture-Mesa/item_suit.git", rev = "main"}
 brotli-asgi = "^1.1.0"
 sse-starlette = "^0.10.3"
+numpy = "^1.22.4"
 
 [tool.poetry.dev-dependencies]
 
