@@ -224,7 +224,9 @@ def _update_stats (subdata: model.Stats):
             , APP_COMMANDS_DATA.info.values.items()
         )
     )
-    assert len( sd_rules ) == len( sd_info )
+    sd_rules_len, sd_info_len = len( sd_rules ), len( sd_info )
+    if sd_rules_len != sd_info_len:
+        raise RuntimeError( "sd_rules_len %i != %i sd_info_len", sd_rules_len, sd_info_len )
     values = subdata.values
     values.server = model.create_stats_numbers( len(sd_info) )
     server_data = {
