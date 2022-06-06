@@ -1,6 +1,8 @@
-from typing import Any, Optional
+from typing import Any, Optional, Collection
 from enum import Enum
 from functools import cache
+from statistics import multimode
+import numpy as np
 from pydantic import BaseModel, create_model
 from pydantic.types import FutureDate
 from csotools_serverquery.common.datacls import DataclsBase
@@ -48,10 +50,49 @@ A2SRules = _create_generic_model( "A2SRules", dict[str,str] )
 
 
 class StatsNumbers (BaseModel):
-    sum: int = 0
+    len: Optional[int] = None
+    sum: Optional[int] = None
+    min: Optional[int] = None
+    max: Optional[int] = None
+    mode: Optional[list[int]] = None
+    median: Optional[float] = None
+    mean: Optional[float] = None
+    var: Optional[float] = None
+    std: Optional[float] = None
 
     def clear (self):
-        self.sum = 0
+        self.len = \
+        self.sum = \
+        self.min = \
+        self.max = \
+        self.mode =\
+        self.median = \
+        self.mean = \
+        self.var = \
+        self.std = None
+
+
+def create_stats_numbers (data: Collection[int]|int):
+    model_cls = StatsNumbers
+    if not isinstance( data, int ):
+        count = len( data )
+        data_ndarray = np.fromiter( data, int, count=count )
+        return model_cls(
+            len=count
+            , sum=data_ndarray.sum()
+            , min=data_ndarray.min()
+            , max=data_ndarray.max()
+            , mode=multimode( data_ndarray )
+            , median=np.median( data_ndarray )
+            , mean=data_ndarray.mean( dtype=float )
+            , var=data_ndarray.var( dtype=float )
+            , std=np.std( data_ndarray, dtype=float )
+        )
+    return model_cls(
+        sum=data
+    )
+
+
 class StatsGroups (BaseModel):
     server: StatsNumbers = StatsNumbers()
     player: StatsNumbers = StatsNumbers()
@@ -59,6 +100,8 @@ class StatsGroups (BaseModel):
     def clear (self):
         self.server.clear()
         self.player.clear()
+
+
 class StatsValues (StatsGroups):
     map: dict[str, StatsGroups] = {}
     gamemode: dict[str, StatsGroups] = {}
@@ -67,6 +110,8 @@ class StatsValues (StatsGroups):
         super().clear()
         self.map.clear()
         self.gamemode.clear()
+
+
 class Stats (GenericModel):
     values: Optional[StatsValues] = StatsValues()
 
