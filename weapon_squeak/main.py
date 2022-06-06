@@ -180,9 +180,9 @@ def event_shutdown_stop_sse ():
 
 
 def _update_clear (subkey: str, subdata: model.GenericModel):
-    subdata.status = False
+    subdata.clear()
     APP_COMMANDS_ETAGS[subkey] = ""
-    subdata.values.clear()
+    return subdata
 
 
 def _update_exception (cmd: str, exc: BaseException):
@@ -291,49 +291,49 @@ def _update_stats (subdata: model.Stats):
 
 def _update (cmd: str, targets: tuple[tuple[str,int]]):
     subdata: model.GenericModel[model.Any] = getattr( APP_COMMANDS_DATA, cmd )
+    subdata_type = model.A2S_MODELS[cmd]
     _update_clear( cmd, subdata )
-    if cmd == model.A2S_CMD_STATS_NAME:
-        # Run this after all A2S queries are done.
-        try:
+    try:
+        if cmd == model.A2S_CMD_STATS_NAME:
+            # Run this after all A2S queries are done.
             _update_stats( subdata )
-        except BaseException as exc:
-            LOGGER.critical( exc, exc_info=True )
-            reset_update_time()
-            return _update_exception( cmd, exc )
-    else:
-        workers = [
-            APP_TPMAN.add_task(
-                _update_task_a2s
-                , cmd
-                , address=(host, port,)
-            )
-            for (host,port,)
-            in targets
-        ]
-        for worker in workers:
-            worker.event.wait()
-            result = worker.result
-            if isinstance( result, BaseException ):
-                LOGGER.critical( exc, exc_info=True )
-                reset_update_time()
-                return _update_exception( cmd, result )
-        filter_factory = lambda: (
-            sorted(
-                filter(
-                    lambda x: not isinstance( x.result, type(None) )
-                    , workers
+        else:
+            workers = [
+                APP_TPMAN.add_task(
+                    _update_task_a2s
+                    , cmd
+                    , address=(host, port,)
                 )
-                , key=lambda x: (*x.kwargs["address"], x.result,)
+                for (host,port,)
+                in targets
+            ]
+            for worker in workers:
+                worker.event.wait()
+                result = worker.result
+                if isinstance( result, BaseException ):
+                    raise result
+            filter_factory = lambda: (
+                sorted(
+                    filter(
+                        lambda x: not isinstance( x.result, type(None) )
+                        , workers
+                    )
+                    , key=lambda x: (*x.kwargs["address"], x.result,)
+                )
             )
-        )
-        items = map(
-            lambda address, result: (f"{address[0]}:{address[1]}", result,)
-            , (x.kwargs["address"] for x in filter_factory())
-            , (x.result for x in filter_factory())
-        )
-        subdata.values = dict( items )
-    APP_COMMANDS_ETAGS[cmd] = generate_etag( subdata )
-    subdata.status = True
+            items = map(
+                lambda address, result: (f"{address[0]}:{address[1]}", result,)
+                , (x.kwargs["address"] for x in filter_factory())
+                , (x.result for x in filter_factory())
+            )
+            subdata.values.update( items )
+        subdata_type.validate( subdata )
+    except BaseException as exc:
+        LOGGER.critical( exc, exc_info=True )
+        subdata = _update_exception( cmd, exc )
+    else:
+        subdata.status = True
+        APP_COMMANDS_ETAGS[cmd] = generate_etag( subdata )
     reset_update_time()
     return subdata
 
