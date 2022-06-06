@@ -1,3 +1,5 @@
+import warnings
+import typing
 import json
 from os import environ
 from time import sleep, perf_counter
@@ -181,13 +183,17 @@ def _update_clear (subkey: str, subdata: model.GenericModel):
     subdata.status = False
     APP_COMMANDS_ETAGS[subkey] = ""
     subdata.values.clear()
+
+
 def _update_exception (cmd: str, exc: BaseException):
     subdata: model.GenericModel[model.Any] = getattr( APP_COMMANDS_DATA, cmd )
-    _update_clear( subdata )
+    _update_clear( cmd, subdata )
     subdata.error = exc
     APP_COMMANDS_ETAGS[cmd] = generate_etag( subdata )
     return subdata
-def _update_task (cmd: str, address: tuple):
+
+
+def _update_task_a2s (cmd: str, address: tuple):
     try:
         return A2S_SYNC( cmd, address )
     except (TimeoutError, AsyncTimeoutError):
@@ -195,45 +201,100 @@ def _update_task (cmd: str, address: tuple):
     except BaseException as exc:
         LOGGER.exception( exc, exc_info=True )
         return exc
+
+
+def _sort_by_func (obj: dict, func: typing.Callable[[tuple],typing.Any], **kwargs):
+    tmp = dict( sorted(obj.items(), key=func, **kwargs) )
+    obj.clear()
+    obj.update( tmp )
+    return obj
+
+
+t_server_data = dict[str,int|model.StatsNumbers]
+t_population = list[int]
+t_player_data = dict[str,t_population|model.StatsNumbers]
+def _update_stats (subdata: model.Stats):
+    sd_rules: dict[str,str] = APP_COMMANDS_DATA.rules.values
+    if not sd_rules:
+        warnings.warn( "A2S_RULES is empty", RuntimeWarning )
+        return subdata
+    sd_info: dict[str,a2s.GoldSrcInfo] = dict(
+        filter(
+            lambda x: x[0] in sd_rules
+            , APP_COMMANDS_DATA.info.values.items()
+        )
+    )
+    assert len( sd_rules ) == len( sd_info )
+    values = subdata.values
+    values.server = model.create_stats_numbers( len(sd_info) )
+    server_data = {
+        "map": t_server_data()
+        , "gamemode": t_server_data()
+    }
+    values_keys = tuple( server_data.keys() )
+    player_data = {
+        "values": t_population()
+        , "map": t_player_data()
+        , "gamemode": t_player_data()
+    }
+    for addr, info in sd_info.items():
+        player_sum = info.player_count - info.bot_count
+        player_data["values"].append( player_sum )
+        for cck,ck in zip(
+            [info.map_name, str(sd_rules[addr]["mp_gamemode"])]
+            , values_keys
+            , strict=True
+        ):
+            cc_s = server_data[ck]
+            cc_s.setdefault( cck, 0 )
+            cc_s[cck] += 1
+            cc_p: t_player_data = player_data[ck]
+            cc_p_c = cc_p.setdefault( cck, [] )
+            cc_p_c.append( player_sum )
+    values.player = model.create_stats_numbers( player_data["values"] )
+    server_sorter = {
+        "map": (lambda x: (x[0].lower(), x[1],))
+        , "gamemode": (lambda x: (int(x[0]), x[1],))
+    }
+    for ck,f in server_sorter.items():
+        coll = _sort_by_func( server_data[ck], f )
+        for cck,v in coll.items():
+            v = model.create_stats_numbers( v )
+            coll[cck] = v
+    player_sorter = {
+        "map": (lambda x: (x[0].lower(), x[1].sum,))
+        , "gamemode": (lambda x: (int(x[0]), x[1].sum,))
+    }
+    for ck,f in player_sorter.items():
+        coll: t_player_data = player_data[ck]
+        for cck,v in coll.items():
+            v = model.create_stats_numbers( v )
+            coll[cck] = v
+        _sort_by_func( coll, f )
+    for ck in values_keys:
+        values_groupsmap: dict = getattr( values, ck )
+        players = player_data[ck]
+        servers = server_data[ck]
+        for dk, dv in servers.items():
+            values_groupsmap[dk] = model.StatsGroups( server=dv, player=players[dk] )
+    return subdata
+
+
 def _update (cmd: str, targets: tuple[tuple[str,int]]):
     subdata: model.GenericModel[model.Any] = getattr( APP_COMMANDS_DATA, cmd )
     _update_clear( cmd, subdata )
     if cmd == model.A2S_CMD_STATS_NAME:
         # Run this after all A2S queries are done.
         try:
-            c_subdata: model.StatsValues = subdata.values
-            c_subdata.server.sum = len( APP_COMMANDS_DATA.ping.values )
-            c_player = c_subdata.player
-            c_player.sum = 0
-            c_map = c_subdata.map
-            c_gamemode = c_subdata.gamemode
-            rules = APP_COMMANDS_DATA.rules.values
-            for addr,info in APP_COMMANDS_DATA.info.values.items():
-                if addr not in rules:
-                    continue
-                info: a2s.GoldSrcInfo = info
-                player_sum = info.player_count - info.bot_count
-                c_player.sum += player_sum
-                for k,c in zip(
-                    [info.map_name, str(rules[addr]["mp_gamemode"])]
-                    , [c_map, c_gamemode,]
-                    , strict=True
-                ):
-                    cc = c.get( k, model.StatsGroups() )
-                    cc.server.sum += 1
-                    cc.player.sum += player_sum
-                    c[k] = cc
-            for c in [c_map, c_gamemode]:
-                tmp = dict( sorted(c.items()) )
-                c.clear()
-                c.update( tmp )
+            _update_stats( subdata )
         except BaseException as exc:
+            LOGGER.critical( exc, exc_info=True )
             reset_update_time()
             return _update_exception( cmd, exc )
     else:
         workers = [
             APP_TPMAN.add_task(
-                _update_task
+                _update_task_a2s
                 , cmd
                 , address=(host, port,)
             )
@@ -244,18 +305,23 @@ def _update (cmd: str, targets: tuple[tuple[str,int]]):
             worker.event.wait()
             result = worker.result
             if isinstance( result, BaseException ):
+                LOGGER.critical( exc, exc_info=True )
                 reset_update_time()
                 return _update_exception( cmd, result )
-        filter_factory = lambda: (filter(
-            lambda x: not isinstance( x.result, type(None) )
-            , workers
-        ))
+        filter_factory = lambda: (
+            sorted(
+                filter(
+                    lambda x: not isinstance( x.result, type(None) )
+                    , workers
+                )
+                , key=lambda x: (*x.kwargs["address"], x.result,)
+            )
+        )
         items = map(
             lambda address, result: (f"{address[0]}:{address[1]}", result,)
             , (x.kwargs["address"] for x in filter_factory())
             , (x.result for x in filter_factory())
         )
-        items = sorted( items )
         subdata.values = dict( items )
     APP_COMMANDS_ETAGS[cmd] = generate_etag( subdata )
     subdata.status = True
