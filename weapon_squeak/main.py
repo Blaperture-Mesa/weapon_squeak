@@ -55,7 +55,7 @@ APP_SSE_STATE = Event()
 APP_LIMITER = Limiter( key_func=get_remote_address, headers_enabled=True )
 etag_add_exception_handler( APP )
 APP.state.limiter = APP_LIMITER
-APP.add_middleware( BrotliMiddleware )
+APP.add_middleware( BrotliMiddleware, gzip_fallback=False )
 APP_TPMAN = ThreadPoolManager( BM_SQUEAK_MAX_THREAD, LOGGER )
 
 
@@ -179,9 +179,21 @@ def event_shutdown_stop_sse ():
     APP_SSE_STATE.set()
 
 
-def _update_clear (subkey: str, subdata: model.GenericModel):
+def _update_clear (cmd: str, subdata: model.GenericModel = None):
+    if subdata is None:
+        subdata = getattr( APP_COMMANDS_DATA, cmd )
     subdata.clear()
-    APP_COMMANDS_ETAGS[subkey] = ""
+    APP_COMMANDS_ETAGS[cmd] = ""
+    return subdata
+
+
+def _update_ok (cmd: str, subdata: model.GenericModel = None):
+    if subdata is None:
+        subdata = getattr( APP_COMMANDS_DATA, cmd )
+    if subdata.error:
+        return
+    subdata.status = True
+    APP_COMMANDS_ETAGS[cmd] = generate_etag( subdata )
     return subdata
 
 
@@ -216,13 +228,18 @@ t_player_data = dict[str,t_population|model.StatsNumbers]
 def _update_stats (subdata: model.Stats):
     sd_rules: dict[str,str] = APP_COMMANDS_DATA.rules.values
     if not sd_rules:
-        warnings.warn( "update_stats: A2S_RULES is empty", RuntimeWarning )
-        return subdata
+        raise RuntimeWarning( "A2S_RULES is empty" )
+    sd_info: dict[str,a2s.GoldSrcInfo] = APP_COMMANDS_DATA.info.values
+    og_sd_ping_len = len( APP_COMMANDS_DATA.ping.values )
+    og_sd_info_len = len( sd_info )
+    og_sd_rules_len = len( sd_rules )
+    values = subdata.values
+    values.missing_from_ping = og_sd_ping_len - og_sd_info_len
     # Try to match the data length.
     sd_info: dict[str,a2s.GoldSrcInfo] = dict(
         filter(
             lambda x: x[0] in sd_rules
-            , APP_COMMANDS_DATA.info.values.items()
+            , sd_info.items()
         )
     )
     sd_rules = dict(
@@ -231,11 +248,15 @@ def _update_stats (subdata: model.Stats):
             , sd_rules.items()
         )
     )
-    sd_rules_len, sd_info_len = len( sd_rules ), len( sd_info )
-    if sd_rules_len != sd_info_len:
-        raise RuntimeError( "sd_rules_len %i != %i sd_info_len", sd_rules_len, sd_info_len )
-    values = subdata.values
-    values.server = model.create_stats_numbers( len(sd_info) )
+    filtered_sd_rules_len, filtered_sd_info_len = len( sd_rules ), len( sd_info )
+    if filtered_sd_rules_len != filtered_sd_info_len:
+        raise RuntimeError(
+            "sd_rules_len != sd_info_len"
+            , filtered_sd_rules_len
+            , filtered_sd_info_len
+        )
+    values.missing_from_info = og_sd_info_len - filtered_sd_info_len
+    values.server = model.create_stats_numbers( filtered_sd_info_len )
     server_data = {
         "map": t_server_data()
         , "gamemode": t_server_data()
@@ -281,18 +302,33 @@ def _update_stats (subdata: model.Stats):
             coll[cck] = v
         _sort_by_func( coll, f )
     for ck in values_keys:
-        values_groupsmap: dict = getattr( values, ck )
+        values_subdata: model.StatsValuesSubdata = getattr( values, ck )
+        subdata_groupsmap = values_subdata.values
         players = player_data[ck]
         servers = server_data[ck]
+        groups_cls = model.StatsGroups
+        gaps = {}
+        if ck == "map":
+            values_subdata.missing_from_ping = og_sd_ping_len - filtered_sd_info_len
+            values_subdata.missing_from_info = og_sd_info_len - filtered_sd_info_len
+        elif ck == "gamemode":
+            values_subdata.missing_from_ping = og_sd_ping_len - filtered_sd_rules_len
+            values_subdata.missing_from_info = og_sd_info_len - filtered_sd_rules_len
+            values_subdata.missing_from_rules = og_sd_rules_len - filtered_sd_rules_len
         for dk, dv in servers.items():
-            values_groupsmap[dk] = model.StatsGroups( server=dv, player=players[dk] )
+            subdata_groupsmap[dk] = groups_cls( **gaps, server=dv, player=players[dk] )
     return subdata
 
 
-def _update (cmd: str, targets: tuple[tuple[str,int]]):
+def _update (
+    cmd: str, targets: tuple[tuple[str,int]]
+    , update_status_ok: bool=True
+    , clear_subdata: bool=True
+):
     subdata: model.GenericModel[model.Any] = getattr( APP_COMMANDS_DATA, cmd )
     subdata_type = model.A2S_MODELS[cmd]
-    _update_clear( cmd, subdata )
+    if clear_subdata:
+        _update_clear( cmd, subdata )
     try:
         if cmd == model.A2S_CMD_STATS_NAME:
             # Run this after all A2S queries are done.
@@ -328,24 +364,32 @@ def _update (cmd: str, targets: tuple[tuple[str,int]]):
             )
             subdata.values.update( items )
         subdata_type.validate( subdata )
+    except Warning as exc:
+        warnings.warn( exc, type(exc) )
+        subdata = _update_exception( cmd, exc )
     except BaseException as exc:
         LOGGER.critical( exc, exc_info=True )
         subdata = _update_exception( cmd, exc )
     else:
-        subdata.status = True
-        APP_COMMANDS_ETAGS[cmd] = generate_etag( subdata )
+        if update_status_ok:
+            _update_ok( cmd, subdata )
     reset_update_time()
     return subdata
 
 
 def run_update ():
-    cmd_list = tuple(
+    cmd_list = tuple[str,...](
         x.value
         for x
         in model.AppCommands.__members__.values()
         if x not in [model.AppCommands.PING,]
     )
-    a2s_list = tuple( filter(lambda x:x not in [model.A2S_CMD_STATS_NAME,], cmd_list) )
+    a2s_list = tuple[str,...](
+        filter(
+            lambda x:x not in [model.A2S_CMD_STATS_NAME,]
+            , cmd_list
+        )
+    )
     while True:
         LOGGER.debug( "Start updating..." )
         ue = perf_counter()
@@ -375,12 +419,18 @@ def run_update ():
                         for (host,port,)
                         in split_hostport( pings.values.keys() )
                     )
+                    , update_status_ok=False
                 )
                 for cmd
                 in a2s_list
             ]
             for worker in workers:
                 worker.event.wait()
+            pings_len = len( pings.values )
+            for k in a2s_list:
+                sd: model.MissingPingOptional = getattr( APP_COMMANDS_DATA, k )
+                sd.missing_from_ping = pings_len - len( sd.values )
+                _update_ok( k, sd )
             _update( model.A2S_CMD_STATS_NAME, None )
         LOGGER.info( f"Start updating...completed! {perf_counter()-ue}s" )
         sleep( BM_SQUEAK_CACHE_TIME )
