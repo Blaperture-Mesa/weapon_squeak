@@ -56,7 +56,7 @@ class StatsNumbers (BaseModel):
     min: Optional[int] = None
     max: Optional[int] = None
     mode: Optional[list[int]] = None
-    median: Optional[int|float] = None
+    median: Optional[float] = None
     mean: Optional[float] = None
     var: Optional[float] = None
     std: Optional[float] = None
