@@ -238,9 +238,10 @@ AppCommandsData = create_model(
 AppCommandsData.clear = _appcmddata_clear
 
 
-A2S_COMMANDS = tuple[str,...]( dict(A2SCommandsDataOptional()).keys() )
+A2S_COMMANDS = frozenset[str]( dict(A2SCommandsDataOptional()).keys() )
 A2SCommands = Enum( "A2SCommands", {x.upper():x.lower() for x in A2S_COMMANDS} )
-AppCommands = Enum( "AppCommands", {x.upper():x.lower() for x in dict(AppCommandsDataOptional()).keys()} )
+APP_COMMANDS = frozenset[str]( dict(AppCommandsDataOptional()).keys() )
+AppCommands = Enum( "AppCommands", {x.upper():x.lower() for x in APP_COMMANDS} )
 
 
 A2S_MODELS: dict[str, BaseClearableModel] = {
