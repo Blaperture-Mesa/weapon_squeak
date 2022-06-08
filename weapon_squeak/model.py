@@ -204,7 +204,7 @@ class AppCommandsDataOptional (A2SCommandsDataOptional):
         return self
 
 
-class StreamCommandsDataOptional (A2SCommandsDataOptional):
+class StreamCommandsDataOptional (AppCommandsDataOptional):
     next_update_time: Optional[FutureDate]
     cache_time: Optional[int]
     etag: Optional[str]
@@ -250,23 +250,3 @@ A2S_MODELS: dict[str, BaseClearableModel] = {
     in A2S_COMMANDS
 }
 A2S_MODELS[A2S_CMD_STATS_NAME] = Stats
-
-
-@cache
-def create_commands_stream_model (cmd: str):
-    kwargs = {
-        cmd: A2S_MODELS[cmd]()
-    }
-    model = create_model(
-        "StreamCommandsData"
-        , **kwargs
-        , __base__=StreamCommandsDataOptional
-    )
-    def _clear (self):
-        my_subdata = getattr( self, cmd )
-        StreamCommandsDataOptional.clear( self )
-        if my_subdata: my_subdata.clear()
-        setattr( self, cmd, my_subdata )
-        return self
-    model.clear = _clear
-    return model
