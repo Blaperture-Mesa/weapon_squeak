@@ -134,7 +134,7 @@ def a2s_retrieve_all (command: model.AppCommands, request: Request, response: Re
 async def iter_sse_a2s_retrieve_all (request: Request, cmd: str):
     subdata: model.GenericModel = getattr( APP_COMMANDS_DATA, cmd )
     subdata_type = model.A2S_MODELS[cmd]
-    result = (model.create_commands_stream_model(cmd))()
+    result = model.StreamCommandsDataOptional()
     result_subdata: model.GenericModel = getattr( result, cmd )
     result.clear()
     while not APP_SSE_STATE.is_set():
@@ -148,8 +148,10 @@ async def iter_sse_a2s_retrieve_all (request: Request, cmd: str):
         exc = subdata.error
         if exc:
             result_subdata = subdata_type.parse_obj( response_exception(None, exc, False) )
+            result_subdata.values = None
         elif not subdata.status:
             result_subdata = subdata_type.parse_obj( response_busy(None) )
+            result_subdata.values = None
         else:
             result_subdata = subdata_type.parse_obj( subdata )
             result.next_update_time = APP_COMMANDS_UPDATE_TIME
