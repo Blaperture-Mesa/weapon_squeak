@@ -471,5 +471,9 @@ async def exception_ratelimit (request: Request, exc: RateLimitExceeded):
     return response
 
 
+def run ():
+    return init( exc_handler=generic_exc_hander )
+
+
 if __name__ == "__main__":
-    init( exc_handler=generic_exc_hander )
+    run()
