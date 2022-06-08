@@ -26,10 +26,10 @@ def _datacls_to_model (cls):
 
 
 @cache
-def _clear_preserve_values (cls: type):
+def _clear_preserve_values (base: type):
     def method (self):
         my_values = self.values
-        super( cls, self ).clear()
+        base.clear( self )
         if my_values: my_values.clear()
         self.values = my_values
         return self
@@ -64,10 +64,10 @@ def _create_generic_model (name: str, values_cls: type = Any):
     if issubclass( values_cls, DataclsBase ):
         values_cls = _datacls_to_model( values_cls )
     base_cls = GenericModel[values_cls]
-    base_cls.clear = _clear_preserve_values( base_cls )
+    base_cls_clear = _clear_preserve_values( base_cls )
     def _method_clear (self):
         MissingPingOptional.clear( self )
-        return base_cls.clear( self )
+        return base_cls_clear( self )
     model_cls = create_model(
         name
         , values=(Optional[dict[str, values_cls]], {})
