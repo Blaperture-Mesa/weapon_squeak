@@ -18,7 +18,7 @@ from slowapi import Limiter
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 from brotli_asgi import BrotliMiddleware
-from item_suit.threadutils import ThreadPoolManager
+from item_suit.threadutils import ThreadPoolManager, ThreadWorker
 from item_suit.extra import split_hostport
 from item_suit.app import *
 from . import model
@@ -54,7 +54,7 @@ APP_SSE_STATE = Event()
 APP_LIMITER = Limiter( key_func=get_remote_address, headers_enabled=True )
 etag_add_exception_handler( APP )
 APP.state.limiter = APP_LIMITER
-APP.add_middleware( BrotliMiddleware )
+APP.add_middleware( BrotliMiddleware, gzip_fallback=False )
 APP_TPMAN = ThreadPoolManager( BM_SQUEAK_MAX_THREAD, LOGGER )
 
 
@@ -120,7 +120,7 @@ _KWARGS = {
 @APP.get( **_KWARGS )
 def a2s_retrieve_all (command: model.AppCommands, request: Request, response: Response):
     command: str = command.value
-    subdata: model.GenericModel[model.Any] = getattr( APP_COMMANDS_DATA, command )
+    subdata: model.GenericModel = getattr( APP_COMMANDS_DATA, command )
     result = { command: {} }
     err: BaseException = getattr( subdata, "error", None )
     if err:
@@ -132,10 +132,10 @@ def a2s_retrieve_all (command: model.AppCommands, request: Request, response: Re
 
 
 async def iter_sse_a2s_retrieve_all (request: Request, cmd: str):
-    subdata: model.GenericModel[model.Any] = getattr( APP_COMMANDS_DATA, cmd )
+    subdata: model.GenericModel = getattr( APP_COMMANDS_DATA, cmd )
     subdata_type = model.A2S_MODELS[cmd]
     result = (model.create_commands_stream_model(cmd))()
-    result_subdata: model.GenericModel[model.Any] = getattr( result, cmd )
+    result_subdata: model.GenericModel = getattr( result, cmd )
     result.clear()
     while not APP_SSE_STATE.is_set():
         if await request.is_disconnected():
@@ -178,18 +178,151 @@ def event_shutdown_stop_sse ():
     APP_SSE_STATE.set()
 
 
-def _update_clear (subkey: str, subdata: model.GenericModel):
+def _update_clear (cmd: str, subdata: model.GenericModel = None):
+    if subdata is None:
+        subdata = getattr( APP_COMMANDS_DATA, cmd )
     subdata.clear()
-    APP_COMMANDS_ETAGS[subkey] = ""
+    APP_COMMANDS_ETAGS[cmd] = ""
+    return subdata
+
+
+def _update_ok (cmd: str, subdata: model.GenericModel = None):
+    if subdata is None:
+        subdata = getattr( APP_COMMANDS_DATA, cmd )
+    if subdata.error:
+        return
+    subdata.status = True
+    APP_COMMANDS_ETAGS[cmd] = generate_etag( subdata )
     return subdata
 
 
 def _update_exception (cmd: str, exc: BaseException):
-    subdata: model.GenericModel[model.Any] = getattr( APP_COMMANDS_DATA, cmd )
+    subdata: model.GenericModel = getattr( APP_COMMANDS_DATA, cmd )
     _update_clear( cmd, subdata )
     subdata.error = exc
     APP_COMMANDS_ETAGS[cmd] = generate_etag( subdata )
     return subdata
+
+
+def _sort_by_func (obj: dict, func: typing.Callable[[tuple],typing.Any], **kwargs):
+    tmp = dict( sorted(obj.items(), key=func, **kwargs) )
+    obj.clear()
+    obj.update( tmp )
+    return obj
+
+
+T_SERVER_DATA = dict[str,int|model.StatsNumbers]
+T_POPULATION = list[int]
+T_PLAYER_DATA = dict[str,T_POPULATION|model.StatsNumbers]
+def _update_stats () -> model.Stats:
+    sd_stats: model.Stats = APP_COMMANDS_DATA.stats
+    sb_stats_key = model.A2S_CMD_STATS_NAME
+    try:
+        sd_rules: dict[str,str] = APP_COMMANDS_DATA.rules.values
+        if not sd_rules:
+            raise RuntimeWarning( "A2S_RULES is empty" )
+        sd_info: dict[str,a2s.GoldSrcInfo] = APP_COMMANDS_DATA.info.values
+        og_sd_ping_len = len( APP_COMMANDS_DATA.ping.values )
+        og_sd_info_len = len( sd_info )
+        og_sd_rules_len = len( sd_rules )
+        values = sd_stats.values
+        values.missing_from_ping = og_sd_ping_len - og_sd_info_len
+        # Try to match the data length.
+        sd_info: dict[str,a2s.GoldSrcInfo] = dict(
+            filter(
+                lambda x: x[0] in sd_rules
+                , sd_info.items()
+            )
+        )
+        sd_rules = dict(
+            filter(
+                lambda x: x[0] in sd_info
+                , sd_rules.items()
+            )
+        )
+        filtered_sd_rules_len, filtered_sd_info_len = len( sd_rules ), len( sd_info )
+        if filtered_sd_rules_len != filtered_sd_info_len:
+            raise RuntimeError(
+                "sd_rules_len != sd_info_len"
+                , filtered_sd_rules_len
+                , filtered_sd_info_len
+            )
+        values.missing_from_info = og_sd_info_len - filtered_sd_info_len
+        values.server = model.create_stats_numbers( filtered_sd_info_len )
+        server_data = {
+            "map": T_SERVER_DATA()
+            , "gamemode": T_SERVER_DATA()
+        }
+        values_keys = tuple( server_data.keys() )
+        player_data = {
+            "values": T_POPULATION()
+            , "map": T_PLAYER_DATA()
+            , "gamemode": T_PLAYER_DATA()
+        }
+        for addr, info in sd_info.items():
+            player_sum = info.player_count - info.bot_count
+            player_data["values"].append( player_sum )
+            for cck,ck in zip(
+                [info.map_name, str(sd_rules[addr]["mp_gamemode"])]
+                , values_keys
+                , strict=True
+            ):
+                cc_s = server_data[ck]
+                cc_s.setdefault( cck, 0 )
+                cc_s[cck] += 1
+                cc_p: T_PLAYER_DATA = player_data[ck]
+                cc_p_c = cc_p.setdefault( cck, [] )
+                cc_p_c.append( player_sum )
+        values.player = model.create_stats_numbers( player_data["values"] )
+        server_sorter = {
+            "map": (lambda x: (x[0].lower(), x[1],))
+            , "gamemode": (lambda x: (int(x[0]), x[1],))
+        }
+        for ck,f in server_sorter.items():
+            coll = _sort_by_func( server_data[ck], f )
+            for cck,v in coll.items():
+                v = model.create_stats_numbers( v )
+                coll[cck] = v
+        player_sorter = {
+            "map": (lambda x: (x[0].lower(), x[1].sum,))
+            , "gamemode": (lambda x: (int(x[0]), x[1].sum,))
+        }
+        for ck,f in player_sorter.items():
+            coll: T_PLAYER_DATA = player_data[ck]
+            for cck,v in coll.items():
+                v = model.create_stats_numbers( v )
+                coll[cck] = v
+            _sort_by_func( coll, f )
+        for ck in values_keys:
+            values_subdata: model.StatsValuesSubdata = getattr( values, ck )
+            subdata_groupsmap = values_subdata.values
+            players = player_data[ck]
+            servers = server_data[ck]
+            groups_cls = model.StatsGroups
+            gaps = {}
+            values_subdata.missing_from_ping = og_sd_ping_len
+            values_subdata.missing_from_info = og_sd_info_len
+            if ck == "map":
+                values_subdata.missing_from_ping -= filtered_sd_info_len
+                values_subdata.missing_from_info -= filtered_sd_info_len
+            elif ck == "gamemode":
+                values_subdata.missing_from_ping -= filtered_sd_rules_len
+                values_subdata.missing_from_info -= filtered_sd_rules_len
+                values_subdata.missing_from_rules = og_sd_rules_len - filtered_sd_rules_len
+            for dk, dv in servers.items():
+                subdata_groupsmap[dk] = groups_cls( **gaps, server=dv, player=players[dk] )
+        type( sd_stats ).validate( sd_stats )
+    except Warning as exc:
+        warnings.warn( exc, type(exc) )
+        _update_exception( sb_stats_key, exc )
+    except BaseException as exc:
+        LOGGER.critical( exc, exc_info=True )
+        _update_exception( sb_stats_key, exc )
+    else:
+        _update_ok( sb_stats_key )
+    finally:
+        reset_update_time()
+    return sd_stats
 
 
 def _update_task_a2s (cmd: str, address: tuple):
@@ -202,111 +335,37 @@ def _update_task_a2s (cmd: str, address: tuple):
         return exc
 
 
-def _sort_by_func (obj: dict, func: typing.Callable[[tuple],typing.Any], **kwargs):
-    tmp = dict( sorted(obj.items(), key=func, **kwargs) )
-    obj.clear()
-    obj.update( tmp )
-    return obj
-
-
-t_server_data = dict[str,int|model.StatsNumbers]
-t_population = list[int]
-t_player_data = dict[str,t_population|model.StatsNumbers]
-def _update_stats (subdata: model.Stats):
-    sd_rules: dict[str,str] = APP_COMMANDS_DATA.rules.values
-    if not sd_rules:
-        warnings.warn( "update_stats: A2S_RULES is empty", RuntimeWarning )
-        return subdata
-    # Try to match the data length.
-    sd_info: dict[str,a2s.GoldSrcInfo] = dict(
-        filter(
-            lambda x: x[0] in sd_rules
-            , APP_COMMANDS_DATA.info.values.items()
-        )
-    )
-    sd_rules = dict(
-        filter(
-            lambda x: x[0] in sd_info
-            , sd_rules.items()
-        )
-    )
-    sd_rules_len, sd_info_len = len( sd_rules ), len( sd_info )
-    if sd_rules_len != sd_info_len:
-        raise RuntimeError( "sd_rules_len %i != %i sd_info_len", sd_rules_len, sd_info_len )
-    values = subdata.values
-    values.server = model.create_stats_numbers( len(sd_info) )
-    server_data = {
-        "map": t_server_data()
-        , "gamemode": t_server_data()
+T_TARGET_INFO = tuple[str,int]
+T_TARGETS = tuple[T_TARGET_INFO]
+def _update_roundrobin (
+    cmds: typing.Iterable[str]
+    , targets: T_TARGETS
+) -> dict[str, model.GenericModel]:
+    cmds = frozenset[str]( cmds )
+    if not cmds.issubset( model.A2S_COMMANDS ):
+        raise ValueError( f"One of {cmds} is not listed in A2S_COMMANDS" )
+    for k in cmds:
+        _update_clear( k )
+    ping_len = len( APP_COMMANDS_DATA.ping.values )
+    sbs = {
+        k: list[ThreadWorker]()
+        for k
+        in cmds
     }
-    values_keys = tuple( server_data.keys() )
-    player_data = {
-        "values": t_population()
-        , "map": t_player_data()
-        , "gamemode": t_player_data()
-    }
-    for addr, info in sd_info.items():
-        player_sum = info.player_count - info.bot_count
-        player_data["values"].append( player_sum )
-        for cck,ck in zip(
-            [info.map_name, str(sd_rules[addr]["mp_gamemode"])]
-            , values_keys
-            , strict=True
-        ):
-            cc_s = server_data[ck]
-            cc_s.setdefault( cck, 0 )
-            cc_s[cck] += 1
-            cc_p: t_player_data = player_data[ck]
-            cc_p_c = cc_p.setdefault( cck, [] )
-            cc_p_c.append( player_sum )
-    values.player = model.create_stats_numbers( player_data["values"] )
-    server_sorter = {
-        "map": (lambda x: (x[0].lower(), x[1],))
-        , "gamemode": (lambda x: (int(x[0]), x[1],))
-    }
-    for ck,f in server_sorter.items():
-        coll = _sort_by_func( server_data[ck], f )
-        for cck,v in coll.items():
-            v = model.create_stats_numbers( v )
-            coll[cck] = v
-    player_sorter = {
-        "map": (lambda x: (x[0].lower(), x[1].sum,))
-        , "gamemode": (lambda x: (int(x[0]), x[1].sum,))
-    }
-    for ck,f in player_sorter.items():
-        coll: t_player_data = player_data[ck]
-        for cck,v in coll.items():
-            v = model.create_stats_numbers( v )
-            coll[cck] = v
-        _sort_by_func( coll, f )
-    for ck in values_keys:
-        values_groupsmap: dict = getattr( values, ck )
-        players = player_data[ck]
-        servers = server_data[ck]
-        for dk, dv in servers.items():
-            values_groupsmap[dk] = model.StatsGroups( server=dv, player=players[dk] )
-    return subdata
-
-
-def _update (cmd: str, targets: tuple[tuple[str,int]]):
-    subdata: model.GenericModel[model.Any] = getattr( APP_COMMANDS_DATA, cmd )
-    subdata_type = model.A2S_MODELS[cmd]
-    _update_clear( cmd, subdata )
-    try:
-        if cmd == model.A2S_CMD_STATS_NAME:
-            # Run this after all A2S queries are done.
-            _update_stats( subdata )
-        else:
-            workers = [
+    for target in targets:
+        for k in sbs:
+            sbs[k].append(
                 APP_TPMAN.add_task(
                     _update_task_a2s
-                    , cmd
-                    , address=(host, port,)
+                    , k
+                    , address=target
                 )
-                for (host,port,)
-                in targets
-            ]
-            for worker in workers:
+            )
+    for k,v in sbs.items():
+        subdata: model.GenericModel = getattr( APP_COMMANDS_DATA, k )
+        subdata_type = model.A2S_MODELS[k]
+        try:
+            for worker in v:
                 worker.event.wait()
                 result = worker.result
                 if isinstance( result, BaseException ):
@@ -315,7 +374,7 @@ def _update (cmd: str, targets: tuple[tuple[str,int]]):
                 sorted(
                     filter(
                         lambda x: not isinstance( x.result, type(None) )
-                        , workers
+                        , v
                     )
                     , key=lambda x: (*x.kwargs["address"], x.result,)
                 )
@@ -326,32 +385,37 @@ def _update (cmd: str, targets: tuple[tuple[str,int]]):
                 , (x.result for x in filter_factory())
             )
             subdata.values.update( items )
-        subdata_type.validate( subdata )
-    except BaseException as exc:
-        LOGGER.critical( exc, exc_info=True )
-        subdata = _update_exception( cmd, exc )
-    else:
-        subdata.status = True
-        APP_COMMANDS_ETAGS[cmd] = generate_etag( subdata )
-    reset_update_time()
-    return subdata
+            subdata_type.validate( subdata )
+        except Warning as exc:
+            warnings.warn( exc, type(exc) )
+            subdata = _update_exception( k, exc )
+        except BaseException as exc:
+            LOGGER.critical( exc, exc_info=True )
+            subdata = _update_exception( k, exc )
+        else:
+            if k != model.AppCommands.PING.value:
+                subdata.missing_from_ping = ping_len - len( subdata.values )
+            _update_ok( k, subdata )
+        finally:
+            sbs[k] = subdata
+            reset_update_time()
+    return sbs
+
+
+def _update_single (cmd: str, targets: T_TARGETS) -> model.GenericModel:
+    return _update_roundrobin( [cmd], targets )[cmd]
 
 
 def run_update ():
-    cmd_list = tuple(
-        x.value
-        for x
-        in model.AppCommands.__members__.values()
-        if x not in [model.AppCommands.PING,]
-    )
-    a2s_list = tuple( filter(lambda x:x not in [model.A2S_CMD_STATS_NAME,], cmd_list) )
+    cmds_nonping: frozenset[str] = model.APP_COMMANDS.difference([model.AppCommands.PING.value,])
+    cmds_roundrobin: frozenset[str] = cmds_nonping.difference([model.A2S_CMD_STATS_NAME,])
     while True:
         LOGGER.debug( "Start updating..." )
         ue = perf_counter()
         for subkey,subdata in APP_COMMANDS_DATA:
             _update_clear( subkey, subdata )
-        pings = _update(
-            "ping"
+        pings = _update_single(
+            model.AppCommands.PING.value
             , (
                 (BM_SQUEAK_TW_ADDRESS.format(host), int(BM_SQUEAK_TW_PORT.format(host,port)),)
                 for port
@@ -360,27 +424,20 @@ def run_update ():
                 in range( BM_SQUEAK_TW_ADDRESS_MIN, BM_SQUEAK_TW_ADDRESS_MAX+1 )
             )
         )
-        if pings.error:
-            for cmd in cmd_list:
-                getattr(APP_COMMANDS_DATA, cmd).error = pings.error
-                APP_COMMANDS_ETAGS[cmd] = APP_COMMANDS_ETAGS["ping"]
+        ping_exc = pings.error
+        if ping_exc:
+            for cmd in cmds_nonping:
+                _update_exception( cmd, ping_exc )
         else:
-            workers = [
-                APP_TPMAN.add_task(
-                    _update
-                    , cmd
-                    , (
-                        (host, int(port))
-                        for (host,port,)
-                        in split_hostport( pings.values.keys() )
-                    )
+            _update_roundrobin(
+                cmds_roundrobin
+                , (
+                    (host, int(port))
+                    for (host,port,)
+                    in split_hostport( pings.values.keys() )
                 )
-                for cmd
-                in a2s_list
-            ]
-            for worker in workers:
-                worker.event.wait()
-            _update( model.A2S_CMD_STATS_NAME, None )
+            )
+            _update_stats()
         LOGGER.info( f"Start updating...completed! {perf_counter()-ue}s" )
         sleep( BM_SQUEAK_CACHE_TIME )
 
@@ -414,4 +471,5 @@ async def exception_ratelimit (request: Request, exc: RateLimitExceeded):
     return response
 
 
-init( exc_handler=generic_exc_hander )
+if __name__ == "__main__":
+    init( exc_handler=generic_exc_hander )

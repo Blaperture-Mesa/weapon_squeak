@@ -3,7 +3,7 @@ from enum import Enum
 from functools import cache
 from statistics import multimode
 import numpy as np
-from pydantic import BaseModel, create_model
+from pydantic import create_model
 from pydantic.types import FutureDate
 from csotools_serverquery.common.datacls import DataclsBase
 from csotools_serverquery import GoldSrcInfo, PlayerInfo
@@ -25,22 +25,60 @@ def _datacls_to_model (cls):
     return create_model( cls.__name__, **members )
 
 
+@cache
+def _clear_preserve_values (base: type):
+    def method (self):
+        my_values = self.values
+        base.clear( self )
+        if my_values: my_values.clear()
+        self.values = my_values
+        return self
+    return method
+
+
+class MissingPingOptional (BaseClearableModel):
+    missing_from_ping: Optional[int]
+
+    def clear (self):
+        self.missing_from_ping = None
+        return self
+
+
+class MissingInfoOptional (BaseClearableModel):
+    missing_from_info: Optional[int]
+
+    def clear (self):
+        self.missing_from_info = None
+        return self
+
+
+class MissingRulesOptional (BaseClearableModel):
+    missing_from_rules: Optional[int]
+
+    def clear (self):
+        self.missing_from_rules = None
+        return self
+
+
 def _create_generic_model (name: str, values_cls: type = Any):
     if issubclass( values_cls, DataclsBase ):
         values_cls = _datacls_to_model( values_cls )
     base_cls = GenericModel[values_cls]
+    base_cls_clear = _clear_preserve_values( base_cls )
+    def _method_clear (self):
+        MissingPingOptional.clear( self )
+        return base_cls_clear( self )
     model_cls = create_model(
         name
-        , values = (Optional[dict[str, values_cls]], {})
-        , __base__ = base_cls
+        , values=(Optional[dict[str, values_cls]], {})
+        , __base__= type(
+            f"{name}WithMissingPing"
+            , (GenericModel[values_cls], MissingPingOptional)
+            , {
+                "clear": _method_clear
+            }
+        )
     )
-    def _clear (self):
-        my_values = self.values
-        super( base_cls, self ).clear()
-        if my_values: my_values.clear()
-        self.values = my_values
-        return self
-    model_cls.clear = _clear
     return model_cls
 
 
@@ -50,7 +88,7 @@ A2SPlayers = _create_generic_model( "A2SPlayers", list[_datacls_to_model(PlayerI
 A2SRules = _create_generic_model( "A2SRules", dict[str,str] )
 
 
-class StatsNumbers (BaseModel):
+class StatsNumbers (BaseClearableModel):
     len: Optional[int] = None
     sum: Optional[int] = None
     min: Optional[int] = None
@@ -62,14 +100,14 @@ class StatsNumbers (BaseModel):
     std: Optional[float] = None
 
     def clear (self):
-        self.len = \
-        self.sum = \
-        self.min = \
-        self.max = \
+        self.len =\
+        self.sum =\
+        self.min =\
+        self.max =\
         self.mode =\
-        self.median = \
-        self.mean = \
-        self.var = \
+        self.median =\
+        self.mean =\
+        self.var =\
         self.std = None
         return self
 
@@ -95,7 +133,7 @@ def create_stats_numbers (data: Collection[int]|int):
     )
 
 
-class StatsGroups (BaseModel):
+class StatsGroups (BaseClearableModel):
     server: StatsNumbers = StatsNumbers()
     player: StatsNumbers = StatsNumbers()
 
@@ -105,12 +143,34 @@ class StatsGroups (BaseModel):
         return self
 
 
-class StatsValues (StatsGroups):
-    map: dict[str, StatsGroups] = {}
-    gamemode: dict[str, StatsGroups] = {}
+class StatsValuesSubdata (MissingInfoOptional, MissingPingOptional):
+    values: dict[str, StatsGroups] = {}
 
     def clear (self):
-        super().clear()
+        MissingPingOptional.clear( self )
+        MissingInfoOptional.clear( self )
+        self.values.clear()
+        return self
+
+
+class StatsMap (StatsValuesSubdata):
+    pass
+
+
+class StatsGamemode (StatsValuesSubdata, MissingRulesOptional):
+    def clear (self):
+        MissingRulesOptional.clear( self )
+        return StatsValuesSubdata.clear( self )
+
+
+class StatsValues (StatsGroups, MissingInfoOptional, MissingPingOptional):
+    map: StatsMap = StatsMap()
+    gamemode: StatsGamemode = StatsGamemode()
+
+    def clear (self):
+        StatsGroups.clear( self )
+        MissingPingOptional.clear( self )
+        MissingInfoOptional.clear( self )
         self.map.clear()
         self.gamemode.clear()
         return self
@@ -118,16 +178,10 @@ class StatsValues (StatsGroups):
 
 class Stats (GenericModel):
     values: Optional[StatsValues] = StatsValues()
-
-    def clear (self):
-        my_values = self.values
-        super().clear()
-        if my_values: my_values.clear()
-        self.values = my_values
-        return self
+Stats.clear = _clear_preserve_values( GenericModel )
 
 
-class A2SCommandsDataOptional (BaseModel):
+class A2SCommandsDataOptional (BaseClearableModel):
     ping: Optional[A2SPing]
     info: Optional[A2SInfo]
     players: Optional[A2SPlayers]
@@ -163,31 +217,34 @@ class StreamCommandsDataOptional (A2SCommandsDataOptional):
         return self
 
 
-AppCommandsData = create_model(
-    "AppCommandsData"
-    , ping = A2SPing()
-    , info = A2SInfo()
-    , players = A2SPlayers()
-    , rules = A2SRules()
-    , stats = Stats()
-    , __base__ = AppCommandsDataOptional
-)
-def _clear (self):
+def _appcmddata_clear (self):
     self.ping.clear()
     self.info.clear()
     self.players.clear()
     self.rules.clear()
     self.stats.clear()
     return self
-AppCommandsData.clear = _clear
 
 
-A2S_COMMANDS = tuple[str,...]( dict(A2SCommandsDataOptional()).keys() )
+AppCommandsData = create_model(
+    "AppCommandsData"
+    , ping=A2SPing()
+    , info=A2SInfo()
+    , players=A2SPlayers()
+    , rules=A2SRules()
+    , stats=Stats()
+    , __base__=AppCommandsDataOptional
+)
+AppCommandsData.clear = _appcmddata_clear
+
+
+A2S_COMMANDS = frozenset[str]( dict(A2SCommandsDataOptional()).keys() )
 A2SCommands = Enum( "A2SCommands", {x.upper():x.lower() for x in A2S_COMMANDS} )
-AppCommands = Enum( "AppCommands", {x.upper():x.lower() for x in dict(AppCommandsDataOptional()).keys()} )
+APP_COMMANDS = frozenset[str]( dict(AppCommandsDataOptional()).keys() )
+AppCommands = Enum( "AppCommands", {x.upper():x.lower() for x in APP_COMMANDS} )
 
 
-A2S_MODELS: dict[str, BaseModel] = {
+A2S_MODELS: dict[str, BaseClearableModel] = {
     x: globals()[f"A2S{x.capitalize()}"]
     for x
     in A2S_COMMANDS
@@ -203,11 +260,11 @@ def create_commands_stream_model (cmd: str):
     model = create_model(
         "StreamCommandsData"
         , **kwargs
-        , __base__ = StreamCommandsDataOptional
+        , __base__=StreamCommandsDataOptional
     )
     def _clear (self):
         my_subdata = getattr( self, cmd )
-        super( type(self), self ).clear()
+        StreamCommandsDataOptional.clear( self )
         if my_subdata: my_subdata.clear()
         setattr( self, cmd, my_subdata )
         return self
