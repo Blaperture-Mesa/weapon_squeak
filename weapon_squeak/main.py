@@ -132,7 +132,7 @@ def a2s_retrieve_all (command: model.AppCommands, request: Request, response: Re
     return result
 
 
-async def iter_sse_a2s_retrieve_all (request: Request, cmd: str):
+async def iter_sse_a2s_retrieve_all (request: Request, cmd: str, status_true_only: bool):
     subdata: model.GenericModel = getattr( APP_COMMANDS_DATA, cmd )
     subdata_type = model.A2S_MODELS[cmd]
     result = model.StreamCommandsDataOptional()
@@ -150,9 +150,13 @@ async def iter_sse_a2s_retrieve_all (request: Request, cmd: str):
         if exc:
             result_subdata = subdata_type.parse_obj( response_exception(None, exc, False) )
             result_subdata.values = None
+            if status_true_only:
+                continue
         elif not subdata.status:
             result_subdata = subdata_type.parse_obj( response_busy(None) )
             result_subdata.values = None
+            if status_true_only:
+                continue
         else:
             result_subdata = subdata_type.parse_obj( subdata )
             result.next_update_time = APP_COMMANDS_UPDATE_TIME
@@ -172,8 +176,8 @@ async def iter_sse_a2s_retrieve_all (request: Request, cmd: str):
     , response_model=model.StreamCommandsDataOptional
     , response_model_exclude_none=True
 )
-async def sse_a2s_retrieve_all (request: Request, command: model.AppCommands):
-    return EventSourceResponse( iter_sse_a2s_retrieve_all(request, command.value) )
+async def sse_a2s_retrieve_all (request: Request, command: model.AppCommands, status_true_only: bool = False):
+    return EventSourceResponse( iter_sse_a2s_retrieve_all(request, command.value, status_true_only) )
 
 
 @APP.on_event( "shutdown" )
